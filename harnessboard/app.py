@@ -11,6 +11,17 @@ from harnessboard.ui.main_window import MainWindow
 from harnessboard.ui.settings_dialog import SettingsDialog
 
 
+def _app_root() -> Path:
+    """Directory to resolve bundled data and default project paths.
+
+    Frozen (PyInstaller) -> folder containing the executable.
+    Source               -> parent of the `harnessboard` package.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     app.setOrganizationName("HarnessBoard")
@@ -18,9 +29,7 @@ def main() -> int:
 
     settings = AppSettings()
     if not settings.is_configured():
-        # First run: prefill with the bundled sample library so the app
-        # opens with something browsable; user can change paths anytime.
-        project_root = Path(__file__).resolve().parent.parent
+        project_root = _app_root()
         sample = project_root / "sample_library"
         if not settings.library_root and sample.is_dir():
             settings.library_root = str(sample)
