@@ -1,0 +1,10 @@
+{
+  "category": "Grommet holders",
+  "z_depths": [25.0, 30.0],
+  "steps": {
+    "std":     {"25.0": "GR-40_std_Z25.step",     "30.0": "GR-40_std_Z30.step"},
+    "mir":     {"25.0": "GR-40_mir_Z25.step",     "30.0": "GR-40_mir_Z30.step"},
+    "rot":     {"25.0": "GR-40_rot_Z25.step",     "30.0": "GR-40_rot_Z30.step"},
+    "rot_mir": {"25.0": "GR-40_rot_mir_Z25.step", "30.0": "GR-40_rot_mir_Z30.step"}
+  }
+}

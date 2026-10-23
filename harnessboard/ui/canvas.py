@@ -1,12 +1,3 @@
-"""Board canvas: scene, view and the placed-part graphics item.
-
-Interaction summary (Phase 2):
-- Activate a part in the library -> ghost follows the cursor, left-click
-  places it (hold Ctrl to keep placing), Esc or right-click cancels.
-- Drag to move, R / Shift+R to rotate, Del to delete (all undoable).
-- Mouse wheel zooms, middle-button drag pans, rubber band selects.
-- Labels are child items: draggable on their own, toggleable globally.
-"""
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
@@ -17,20 +8,28 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QMenu,
 )
 
-from harnessboard.library import Library, Part
+from harnessboard.library import ORIENTATIONS, Library, Part
 from harnessboard.ui.cable import SNAP_DISTANCE, CableItem, rounded_path
 from harnessboard.ui.commands import (
     AddPartsCommand,
     MovePartsCommand,
     RemovePartsCommand,
     RotatePartsCommand,
+    SetOrientationCommand,
 )
 
 ICON_SIZE = 64
 SCENE_RECT = QRectF(0, 0, 4000, 3000)
 GRID_STEP = 50
+
+_BADGE_TEXT = {"mir": "M", "rot": "R", "rot_mir": "MR"}
+_BIT_TOGGLE = {
+    "mirror": {"std": "mir", "mir": "std", "rot": "rot_mir", "rot_mir": "rot"},
+    "rotate": {"std": "rot", "rot": "std", "mir": "rot_mir", "rot_mir": "mir"},
+}
 
 
 def part_pixmap(part: Part) -> QPixmap:
@@ -51,6 +50,8 @@ class PartItem(QGraphicsPixmapItem):
     def __init__(self, part: Part, labels_visible: bool = True) -> None:
         super().__init__(part_pixmap(part))
         self.part = part
+        self.orientation = "std"
+        self._labels_visible = labels_visible
         w, h = self.pixmap().width(), self.pixmap().height()
         self.setOffset(-w / 2, -h / 2)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
@@ -61,12 +62,44 @@ class PartItem(QGraphicsPixmapItem):
         self.label = QGraphicsSimpleTextItem(part.name, self)
         self.label.setFont(QFont("Segoe UI", 8))
         self.label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-        # keep the label readable when the part rotates
         self.label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
         rect = self.label.boundingRect()
         self.label.setPos(-rect.width() / 2, h / 2 + 4)
         self.label.setVisible(labels_visible)
 
+        # Small orientation badge, top-right corner. Hidden for "std".
+        self.badge = QGraphicsSimpleTextItem("", self)
+        self.badge.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+        self.badge.setBrush(QColor("#c00000"))
+        self.badge.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+        self.badge.setZValue(10)
+        self.badge.setVisible(False)
+
+    # --- orientation ------------------------------------------------
+    def set_orientation(self, orient: str) -> None:
+        if orient not in ORIENTATIONS:
+            orient = "std"
+        self.orientation = orient
+        self._update_badge()
+        self.update()
+
+    def _update_badge(self) -> None:
+        if self.orientation == "std" or not self._labels_visible:
+            self.badge.setVisible(False)
+            return
+        self.badge.setText(_BADGE_TEXT[self.orientation])
+        r = self.badge.boundingRect()
+        w = self.pixmap().width()
+        h = self.pixmap().height()
+        self.badge.setPos(w / 2 - r.width(), -h / 2)
+        self.badge.setVisible(True)
+
+    def set_labels_visible(self, visible: bool) -> None:
+        self._labels_visible = visible
+        self.label.setVisible(visible)
+        self._update_badge()
+
+    # --- Qt hooks ---------------------------------------------------
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             scene = self.scene()
@@ -83,12 +116,14 @@ class PartItem(QGraphicsPixmapItem):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(self.boundingRect().adjusted(1, 1, -1, -1))
 
+    # --- serialization ----------------------------------------------
     def to_dict(self) -> dict:
         return {
             "name": self.part.name,
             "x": self.pos().x(),
             "y": self.pos().y(),
             "rotation": self.rotation(),
+            "orientation": self.orientation,
             "label_x": self.label.pos().x(),
             "label_y": self.label.pos().y(),
         }
@@ -98,6 +133,7 @@ class PartItem(QGraphicsPixmapItem):
         self.setRotation(float(data.get("rotation", 0)))
         if "label_x" in data:
             self.label.setPos(float(data["label_x"]), float(data["label_y"]))
+        self.set_orientation(str(data.get("orientation", "std")))
 
 
 class BoardScene(QGraphicsScene):
@@ -127,7 +163,6 @@ class BoardScene(QGraphicsScene):
                 cable.update_path()
 
     def part_attached(self, part_item: PartItem) -> bool:
-        """One cable per attachment (SPEC §6)."""
         return any(
             c.start_item is part_item or c.end_item is part_item
             for c in self.cable_items()
@@ -147,9 +182,54 @@ class BoardScene(QGraphicsScene):
     def set_labels_visible(self, visible: bool) -> None:
         self.labels_visible = visible
         for item in self.part_items():
-            item.label.setVisible(visible)
+            item.set_labels_visible(visible)
         for cable in self.cable_items():
             cable.label.setVisible(visible)
+
+    # --- context menu (NEW) -------------------------------------------
+    def contextMenuEvent(self, event) -> None:
+        # Select the part under the cursor if it isn't already selected.
+        for it in self.items(event.scenePos()):
+            part_item = it if isinstance(it, PartItem) else (
+                it.parentItem() if isinstance(it.parentItem(), PartItem) else None
+            )
+            if part_item is not None:
+                if not part_item.isSelected():
+                    self.clearSelection()
+                    part_item.setSelected(True)
+                break
+
+        selected = self.selected_parts()
+        if not selected:
+            super().contextMenuEvent(event)
+            return
+
+        menu = QMenu()
+        orient_menu = menu.addMenu("Orientation")
+        common = selected[0].orientation
+        for item in selected[1:]:
+            if item.orientation != common:
+                common = None
+                break
+        for orient in ORIENTATIONS:
+            action = orient_menu.addAction(orient)
+            action.setCheckable(True)
+            action.setChecked(common == orient)
+            action.triggered.connect(
+                lambda checked=False, o=orient, items=list(selected):
+                self.undo_stack.push(SetOrientationCommand(items, o))
+            )
+
+        menu.addSeparator()
+        menu.addAction(
+            "Rotate 15° CW (R)",
+            lambda: self.undo_stack.push(RotatePartsCommand(list(selected), 15)),
+        )
+        menu.addAction(
+            "Rotate 15° CCW (Shift+R)",
+            lambda: self.undo_stack.push(RotatePartsCommand(list(selected), -15)),
+        )
+        menu.exec(event.screenPos())
 
     # --- undoable move tracking ----------------------------------------
     def mousePressEvent(self, event) -> None:
@@ -166,7 +246,6 @@ class BoardScene(QGraphicsScene):
                 if item.pos() != old
             }
             if moves:
-                # items are already at their new position; command re-applies it
                 self.undo_stack.push(MovePartsCommand(moves))
             self._move_start = {}
 
@@ -176,14 +255,13 @@ class BoardScene(QGraphicsScene):
         part_index = {item: i for i, item in enumerate(parts)}
         return {
             "app": "HarnessBoard",
-            "version": 1,
+            "version": 2,
             "labels_visible": self.labels_visible,
             "parts": [item.to_dict() for item in parts],
             "cables": [cable.to_dict(part_index) for cable in self.cable_items()],
         }
 
     def load_dict(self, data: dict, library: Library) -> list[str]:
-        """Rebuild the scene from a saved dict. Returns warnings."""
         warnings: list[str] = []
         self.clear()
         self.undo_stack.clear()
@@ -194,7 +272,7 @@ class BoardScene(QGraphicsScene):
             part = library.part_by_name(name)
             if part is None:
                 warnings.append(f"Part not in library, skipped: {name}")
-                loaded_parts.append(None)  # keep indices aligned for cables
+                loaded_parts.append(None)
                 continue
             item = PartItem(part, self.labels_visible)
             item.apply_dict(entry)
@@ -207,7 +285,7 @@ class BoardScene(QGraphicsScene):
 
 
 class BoardView(QGraphicsView):
-    partsDeleted = Signal(list)  # list of deleted part names (explicit delete only)
+    partsDeleted = Signal(list)
     statusMessage = Signal(str)
 
     def __init__(self, scene: BoardScene, parent=None) -> None:
@@ -223,7 +301,6 @@ class BoardView(QGraphicsView):
         self._pan_last = None
         self._clipboard: list[dict] = []
         self._clipboard_parts: dict[str, Part] = {}
-        # cable drawing state
         self._cable_designation: str | None = None
         self._cable_diameter: float = 0.0
         self._cable_points: list[QPointF] = []
@@ -381,6 +458,14 @@ class BoardView(QGraphicsView):
         if items:
             self.board_scene.undo_stack.push(RotatePartsCommand(items, delta))
 
+    def _toggle_orientation_bit(self, bit: str) -> None:
+        items = self.board_scene.selected_parts()
+        if not items:
+            return
+        target = _BIT_TOGGLE[bit][items[0].orientation]
+        self.board_scene.undo_stack.push(SetOrientationCommand(items, target))
+        self.statusMessage.emit(f"Orientation → {target}")
+
     def copy_selected(self) -> None:
         items = self.board_scene.selected_parts()
         self._clipboard = [item.to_dict() for item in items]
@@ -440,7 +525,7 @@ class BoardView(QGraphicsView):
                 return
             if event.button() == Qt.MouseButton.RightButton:
                 if self._cable_points:
-                    self._cable_points.pop()  # step back one point
+                    self._cable_points.pop()
                     self._update_cable_preview(scene_pos)
                 else:
                     self.cancel_cable()
@@ -450,7 +535,6 @@ class BoardView(QGraphicsView):
             if event.button() == Qt.MouseButton.LeftButton:
                 item = PartItem(self._pending_part, self.board_scene.labels_visible)
                 drop_pos = self.mapToScene(event.position().toPoint())
-                # snap on-line parts (clips, terminals…) onto a nearby cable
                 cable, snap_point = self.board_scene.nearest_cable(drop_pos)
                 item.setPos(snap_point if cable is not None else drop_pos)
                 self.board_scene.undo_stack.push(
@@ -460,7 +544,6 @@ class BoardView(QGraphicsView):
                     event.modifiers() & Qt.KeyboardModifier.ControlModifier
                 )
                 if not keep_placing:
-                    part = self._pending_part
                     self.cancel_placement()
                     self.board_scene.clearSelection()
                     item.setSelected(True)
@@ -492,7 +575,6 @@ class BoardView(QGraphicsView):
 
     def mouseDoubleClickEvent(self, event) -> None:
         if self.is_drawing_cable:
-            # the first click of the double-click already added a point
             self._finish_cable()
             event.accept()
             return
@@ -521,6 +603,10 @@ class BoardView(QGraphicsView):
         elif key == Qt.Key.Key_R:
             delta = -15.0 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 15.0
             self.rotate_selected(delta)
+        elif key == Qt.Key.Key_M:
+            self._toggle_orientation_bit("mirror")
+        elif key == Qt.Key.Key_O:
+            self._toggle_orientation_bit("rotate")
         elif event.matches(QKeySequence.StandardKey.Copy):
             self.copy_selected()
         elif event.matches(QKeySequence.StandardKey.Paste):

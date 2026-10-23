@@ -1,4 +1,3 @@
-"""Main window: library dock (left), board canvas (center), details dock (right)."""
 from __future__ import annotations
 
 import json
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
 import harnessboard
 from harnessboard.bom import bom_cables, bom_parts, cable_z
 from harnessboard.excel_export import export_bom
+from harnessboard.export_folder import export_folder
 from harnessboard.library import Library, Part, scan_library
 from harnessboard.project import Harness
 from harnessboard.settings import AppSettings
@@ -92,6 +92,7 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu, "Save layout &as…", QKeySequence.StandardKey.SaveAs, self.save_file_as)
         file_menu.addSeparator()
         self._add_action(file_menu, "Export &BOM to Excel…", QKeySequence("Ctrl+E"), self.export_bom_excel)
+        self._add_action(file_menu, "Export &folder (PDF + BOM + STEP + MCAM)…", QKeySequence("Ctrl+Shift+E"), self.export_full_folder)
         file_menu.addSeparator()
         self._add_action(file_menu, "E&xit", None, self.close)
 
@@ -282,6 +283,51 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export failed", f"Could not write the file:\n{exc}")
             return
         self.statusBar().showMessage(f"BOM exported: {path}")
+
+    def export_full_folder(self) -> None:
+        """Export PDF + BOM (xlsx + csv) + STEP + MCAM to one folder."""
+        from datetime import datetime
+
+        parts = bom_parts(self.scene)
+        cables = bom_cables(self.scene)
+        if not parts and not cables:
+            QMessageBox.information(self, "Empty board", "Nothing to export yet.")
+            return
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        if self.harness is not None:
+            default_dir = self.harness.folder / f"export_{stamp}"
+        else:
+            base = Path(self.settings.projects_root or ".")
+            default_dir = base / f"export_{stamp}"
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose export folder", str(default_dir.parent)
+        )
+        if not chosen:
+            return
+        out_dir = Path(chosen) / default_dir.name
+        if out_dir.exists():
+            answer = QMessageBox.question(
+                self, "Folder exists",
+                f"{out_dir.name} already exists. Overwrite?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        result = export_folder(out_dir, self.scene, self.harness, parts, cables)
+        if "error" in result:
+            QMessageBox.critical(self, "Export failed", result["error"])
+            return
+        lines = [
+            f"Exported to: {result['folder']}",
+            f"  STEP files: {result['steps_copied']}",
+            f"  MCAM files: {result['mcam_copied']}",
+        ]
+        if result["missing"]:
+            lines.append("")
+            lines.append("Missing step files (skipped):")
+            lines.extend(f"  • {m}" for m in result["missing"])
+        QMessageBox.information(self, "Export complete", "\n".join(lines))
+        self.statusBar().showMessage(f"Exported to {result['folder']}")
 
     def _on_parts_deleted(self, names: list[str]) -> None:
         """SPEC decision: deleting the last instance asks whether to remove the file."""

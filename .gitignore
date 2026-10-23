@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtualenv
+venv/
+.venv/
+
+# Backups
+*.bak
+
+# Excel lock/temp files
+~$*.xlsx
+*.tmp
+BOM.xlsx
+
+# Local test data
+projects/
+export_*/
+test.py
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

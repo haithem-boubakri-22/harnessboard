@@ -1,14 +1,3 @@
-"""Part library: scans the library root folder into Part objects.
-
-Library layout (SPEC.md section 4):
-    <library root>/
-        cables.json                     designation -> diameter (mm)
-        <Category>/[<Subcategory>/]
-            <PartName>/                 one folder per orientation variant
-                icon.png                2D icon (any common image format)
-                <PartName>.step         3D model
-                part.json               {"category": ..., "z_depth": ...}
-"""
 from __future__ import annotations
 
 import json
@@ -19,22 +8,62 @@ from pathlib import Path
 ICON_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".svg"}
 STEP_EXTENSIONS = {".step", ".stp"}
 
+# The four orientation states. Order matters only for display.
+ORIENTATIONS = ("std", "mir", "rot", "rot_mir")
+
 
 @dataclass
 class Part:
     name: str                 # folder name = model name (identity everywhere)
-    category: str             # from folder tree, e.g. "Connector holders"
+    category: str             # from folder tree
     folder: Path
     icon_path: Path | None = None
+    # Legacy single-file fields (kept for back-compat):
     step_path: Path | None = None
     z_depth: float | None = None
+    # New schema:
+    z_depths: list[float] = field(default_factory=list)
+    # orientation -> {z_depth: absolute step file path}
+    steps: dict[str, dict[float, Path]] = field(default_factory=dict)
+
+    def available_z(self, orientation: str = "std") -> list[float]:
+        """Z depths available for this part (optionally per-orientation)."""
+        if self.steps:
+            bucket = self.steps.get(orientation) or {}
+            return sorted(bucket)
+        if self.z_depth is not None:
+            return [self.z_depth]
+        return []
+
+    def default_z(self) -> float | None:
+        for orient in ORIENTATIONS:
+            zs = self.available_z(orient)
+            if zs:
+                return zs[0]
+        return None
+
+    def resolve_step(self, orientation: str, z: float | None) -> Path | None:
+        """Best step file for a given orientation + Z. Snaps to nearest Z."""
+        # New schema preferred:
+        if self.steps:
+            bucket = self.steps.get(orientation)
+            if not bucket:
+                return None
+            if z is None:
+                return bucket[sorted(bucket)[0]]
+            best_z = min(bucket, key=lambda v: abs(v - z))
+            return bucket[best_z]
+        # Legacy fallback: only 'std' orientation exists.
+        if orientation == "std":
+            return self.step_path
+        return None
 
 
 @dataclass
 class Library:
     root: Path | None = None
     parts: list[Part] = field(default_factory=list)
-    cables: dict[str, float] = field(default_factory=dict)  # designation -> diameter
+    cables: dict[str, float] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
     def part_by_name(self, name: str) -> Part | None:
@@ -52,6 +81,43 @@ def _is_part_folder(filenames: list[str]) -> bool:
     if "part.json" in filenames:
         return True
     return any(Path(f).suffix.lower() in STEP_EXTENSIONS for f in filenames)
+
+
+def _load_step_map(
+    part_folder: Path, meta: dict, errors: list[str]
+) -> tuple[dict[str, dict[float, Path]], list[float]]:
+    """Parse the new 'steps' schema. Returns ({orient: {z: path}}, [z...])."""
+    raw = meta.get("steps")
+    if not isinstance(raw, dict):
+        return {}, []
+    steps: dict[str, dict[float, Path]] = {}
+    all_z: set[float] = set()
+    for orient, by_z in raw.items():
+        if orient not in ORIENTATIONS:
+            errors.append(f"{part_folder.name}: unknown orientation '{orient}' — skipped")
+            continue
+        if not isinstance(by_z, dict):
+            errors.append(f"{part_folder.name}: 'steps.{orient}' is not a dict — skipped")
+            continue
+        bucket: dict[float, Path] = {}
+        for z_str, rel_path in by_z.items():
+            try:
+                z = float(z_str)
+            except (TypeError, ValueError):
+                errors.append(f"{part_folder.name}: bad Z key '{z_str}'")
+                continue
+            file_path = (part_folder / str(rel_path))
+            if not file_path.is_file():
+                errors.append(
+                    f"{part_folder.name}: step file missing for "
+                    f"{orient} @ Z{z:g}: {rel_path}"
+                )
+                continue
+            bucket[z] = file_path
+            all_z.add(z)
+        if bucket:
+            steps[orient] = bucket
+    return steps, sorted(all_z)
 
 
 def scan_library(root: str | Path) -> Library:
@@ -73,7 +139,7 @@ def scan_library(root: str | Path) -> Library:
         folder = Path(dirpath)
         if folder == root or not _is_part_folder(filenames):
             continue
-        dirnames.clear()  # a part folder has no part subfolders
+        dirnames.clear()
 
         part = Part(
             name=folder.name,
@@ -85,6 +151,7 @@ def scan_library(root: str | Path) -> Library:
             if part.icon_path is None and suffix in ICON_EXTENSIONS:
                 part.icon_path = folder / f
             elif part.step_path is None and suffix in STEP_EXTENSIONS:
+                # legacy single-step fallback
                 part.step_path = folder / f
 
         meta_file = folder / "part.json"
@@ -95,6 +162,12 @@ def scan_library(root: str | Path) -> Library:
                     part.category = str(meta["category"])
                 if meta.get("z_depth") is not None:
                     part.z_depth = float(meta["z_depth"])
+                part.steps, zs_from_steps = _load_step_map(folder, meta, lib.errors)
+                declared = meta.get("z_depths")
+                if isinstance(declared, list):
+                    part.z_depths = sorted(float(z) for z in declared)
+                elif zs_from_steps:
+                    part.z_depths = zs_from_steps
             except (ValueError, TypeError) as exc:
                 lib.errors.append(f"{part.name}: bad part.json ({exc})")
 
