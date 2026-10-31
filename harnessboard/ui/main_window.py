@@ -295,25 +295,35 @@ class MainWindow(QMainWindow):
         if not parts and not cables:
             QMessageBox.information(self, "Empty board", "Nothing to export yet.")
             return
-        stamp = datetime.now().strftime("%Y%m%d_%H%M")
         if self.harness is not None:
-            default_dir = self.harness.folder / f"export_{stamp}"
+            default_dir = self.harness.folder / "Export"
         else:
             base = Path(self.settings.projects_root or ".")
-            default_dir = base / f"export_{stamp}"
+            default_dir = base / "Export"
+            
         chosen = QFileDialog.getExistingDirectory(
             self, "Choose export folder", str(default_dir.parent)
         )
         if not chosen:
             return
         out_dir = Path(chosen) / default_dir.name
+        
         if out_dir.exists():
             answer = QMessageBox.question(
                 self, "Folder exists",
-                f"{out_dir.name} already exists. Overwrite?",
+                f"The folder '{out_dir.name}' already exists.\n\n"
+                "Do you want to completely overwrite it?\n"
+                "(Old files inside it will be deleted to prevent ghost files).",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
+                return
+            # Clean the folder so deleted parts don't leave stale files behind
+            import shutil
+            try:
+                shutil.rmtree(out_dir)
+            except OSError as exc:
+                QMessageBox.critical(self, "Delete failed", f"Could not clear old export folder:\n{exc}")
                 return
         result = export_folder(out_dir, self.scene, self.harness, parts, cables)
         if "error" in result:
