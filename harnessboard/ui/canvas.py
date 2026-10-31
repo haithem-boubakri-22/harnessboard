@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsPixmapItem,
@@ -80,8 +80,25 @@ class PartItem(QGraphicsPixmapItem):
         if orient not in ORIENTATIONS:
             orient = "std"
         self.orientation = orient
+        self._apply_orientation_transform()
         self._update_badge()
         self.update()
+
+    def _apply_orientation_transform(self) -> None:
+        base_pixmap = part_pixmap(self.part)
+        transform = QTransform()
+        
+        if self.orientation in ("mir", "rot_mir"):
+            transform.scale(-1, 1)
+        if self.orientation in ("rot", "rot_mir"):
+            transform.rotate(90)
+            
+        transformed = base_pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
+        self.setPixmap(transformed)
+        
+        w, h = transformed.width(), transformed.height()
+        self.setOffset(-w / 2, -h / 2)
+        self.label.setPos(-self.label.boundingRect().width() / 2, h / 2 + 4)
 
     def _update_badge(self) -> None:
         if self.orientation == "std" or not self._labels_visible:

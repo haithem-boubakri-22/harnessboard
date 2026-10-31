@@ -86,37 +86,40 @@ def _is_part_folder(filenames: list[str]) -> bool:
 def _load_step_map(
     part_folder: Path, meta: dict, errors: list[str]
 ) -> tuple[dict[str, dict[float, Path]], list[float]]:
-    """Parse the new 'steps' schema. Returns ({orient: {z: path}}, [z...])."""
+    """Parse the 'steps' schema. Supports both old (nested by Z) and new (flat with z_depth)."""
     raw = meta.get("steps")
     if not isinstance(raw, dict):
         return {}, []
+    
+    default_z = float(meta.get("z_depth", 0.0))
     steps: dict[str, dict[float, Path]] = {}
     all_z: set[float] = set()
-    for orient, by_z in raw.items():
+    
+    for orient, value in raw.items():
         if orient not in ORIENTATIONS:
             errors.append(f"{part_folder.name}: unknown orientation '{orient}' — skipped")
             continue
-        if not isinstance(by_z, dict):
-            errors.append(f"{part_folder.name}: 'steps.{orient}' is not a dict — skipped")
-            continue
-        bucket: dict[float, Path] = {}
-        for z_str, rel_path in by_z.items():
-            try:
+            
+        if isinstance(value, str):
+            # New flat format: "std": "file.step"
+            file_path = part_folder / value
+            if file_path.is_file():
+                steps[orient] = {default_z: file_path}
+                all_z.add(default_z)
+            else:
+                errors.append(f"{part_folder.name}: missing file {value}")
+        elif isinstance(value, dict):
+            # Legacy nested format
+            bucket = {}
+            for z_str, rel_path in value.items():
                 z = float(z_str)
-            except (TypeError, ValueError):
-                errors.append(f"{part_folder.name}: bad Z key '{z_str}'")
-                continue
-            file_path = (part_folder / str(rel_path))
-            if not file_path.is_file():
-                errors.append(
-                    f"{part_folder.name}: step file missing for "
-                    f"{orient} @ Z{z:g}: {rel_path}"
-                )
-                continue
-            bucket[z] = file_path
-            all_z.add(z)
-        if bucket:
-            steps[orient] = bucket
+                file_path = part_folder / str(rel_path)
+                if file_path.is_file():
+                    bucket[z] = file_path
+                    all_z.add(z)
+            if bucket:
+                steps[orient] = bucket
+                
     return steps, sorted(all_z)
 
 
