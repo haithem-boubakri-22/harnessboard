@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QTransform
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QTransform, QBrush
 from PySide6.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsItem,
@@ -157,25 +157,50 @@ class PartItem(QGraphicsPixmapItem):
 
 
 class HarnessBoxItem(QGraphicsRectItem):
-    """A visual box representing a single harness on the board."""
+    """A visual box representing a single harness on the board, with a title block."""
     def __init__(self, name: str = "New Harness", rect=QRectF(0, 0, 800, 600)) -> None:
         super().__init__(rect)
         self.name = name
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
-        self.setPen(QPen(QColor("#d81b60"), 2, Qt.PenStyle.DashLine))  # Pink dashed border
-        self.setBrush(QColor(216, 27, 96, 15))  # Very faint pink fill
-        self.setZValue(-10)  # Keep boxes behind everything
+        
+        # Solid magenta line like the reference PDF
+        self.setPen(QPen(QColor("#d81b60"), 1.5, Qt.PenStyle.SolidLine))
+        self.setBrush(QColor(216, 27, 96, 10))  # Very faint fill
+        self.setZValue(-10)
         self._block_moves = False
         
         self.label = QGraphicsSimpleTextItem(name, self)
-        self.label.setFont(QFont("", 12, QFont.Weight.Bold))
-        self.label.setBrush(QColor("#d81b60"))
-        self.label.setPos(rect.left() + 10, rect.top() + 10)
+        self.label.setFont(QFont("", 10, QFont.Weight.Bold))
+        self.label.setBrush(QColor("#000000"))
+        self.label.setPos(rect.left() + 15, rect.top() + 15)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        # Draw the base rectangle
+        super().paint(painter, option, widget)
+        
+        # Draw a "Title Block" in the top left corner (like the reference PDF)
+        rect = self.rect()
+        block_w = max(250, len(self.name) * 12 + 40)
+        block_h = 40
+        
+        painter.setPen(QPen(QColor("#000000"), 1.0))
+        painter.setBrush(QBrush(QColor("#ffffff")))
+        
+        # Draw the white table box
+        table_rect = QRectF(rect.left(), rect.top(), block_w, block_h)
+        painter.drawRect(table_rect)
+        
+        # Draw vertical separator line inside the table
+        painter.drawLine(
+            QPointF(rect.left() + block_w * 0.7, rect.top()),
+            QPointF(rect.left() + block_w * 0.7, rect.top() + block_h)
+        )
 
     def set_name(self, new_name: str):
         self.name = new_name
         self.label.setText(new_name)
+        self.update() # Repaint the table to fit the new name
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
