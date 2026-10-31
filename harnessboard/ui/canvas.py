@@ -3,12 +3,14 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (
+    QGraphicsRectItem,
     QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
     QMenu,
+    QInputDialog,
 )
 
 from harnessboard.library import ORIENTATIONS, Library, Part
@@ -153,6 +155,63 @@ class PartItem(QGraphicsPixmapItem):
         self.set_orientation(str(data.get("orientation", "std")))
 
 
+
+class HarnessBoxItem(QGraphicsRectItem):
+    """A visual box representing a single harness on the board."""
+    def __init__(self, name: str = "New Harness", rect=QRectF(0, 0, 800, 600)) -> None:
+        super().__init__(rect)
+        self.name = name
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setPen(QPen(QColor("#d81b60"), 2, Qt.PenStyle.DashLine))  # Pink dashed border
+        self.setBrush(QColor(216, 27, 96, 15))  # Very faint pink fill
+        self.setZValue(-10)  # Keep boxes behind everything
+        self._block_moves = False
+        
+        self.label = QGraphicsSimpleTextItem(name, self)
+        self.label.setFont(QFont("", 12, QFont.Weight.Bold))
+        self.label.setBrush(QColor("#d81b60"))
+        self.label.setPos(rect.left() + 10, rect.top() + 10)
+
+    def set_name(self, new_name: str):
+        self.name = new_name
+        self.label.setText(new_name)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            if not self._block_moves and self.scene():
+                self._block_moves = True
+                delta = value - self.pos()
+                # Move all parts inside the box
+                for item in self.scene().part_items():
+                    if self.sceneBoundingRect().contains(item.pos()):
+                        item.setPos(item.pos() + delta)
+                self._block_moves = False
+        return super().itemChange(change, value)
+
+    def mouseDoubleClickEvent(self, event):
+        text, ok = QInputDialog.getText(None, "Harness Name", "Enter harness number:", text=self.name)
+        if ok and text.strip():
+            self.set_name(text.strip())
+        super().mouseDoubleClickEvent(event)
+
+    def to_dict(self) -> dict:
+        r = self.rect()
+        return {
+            "name": self.name,
+            "x": self.pos().x(),
+            "y": self.pos().y(),
+            "w": r.width(),
+            "h": r.height()
+        }
+
+    def apply_dict(self, data: dict):
+        self.setPos(float(data.get("x", 0)), float(data.get("y", 0)))
+        self.setRect(0, 0, float(data.get("w", 800)), float(data.get("h", 600)))
+        self.set_name(str(data.get("name", "Harness")))
+        self.label.setPos(10, 10)
+
+
 class BoardScene(QGraphicsScene):
     def __init__(self, undo_stack, parent=None) -> None:
         super().__init__(SCENE_RECT, parent)
@@ -163,6 +222,12 @@ class BoardScene(QGraphicsScene):
     # --- part queries -------------------------------------------------
     def part_items(self) -> list[PartItem]:
         return [i for i in self.items() if isinstance(i, PartItem)]
+
+    def harness_boxes(self) -> list[HarnessBoxItem]:
+        return [i for i in self.items() if isinstance(i, HarnessBoxItem)]
+        
+    def selected_boxes(self) -> list[HarnessBoxItem]:
+        return [i for i in self.selectedItems() if isinstance(i, HarnessBoxItem)]
 
     def selected_parts(self) -> list[PartItem]:
         return [i for i in self.selectedItems() if isinstance(i, PartItem)]
@@ -252,7 +317,12 @@ class BoardScene(QGraphicsScene):
     def mousePressEvent(self, event) -> None:
         super().mousePressEvent(event)
         if event.button() == Qt.MouseButton.LeftButton:
-            self._move_start = {i: QPointF(i.pos()) for i in self.selected_parts()}
+            items_to_move = self.selected_parts() + self.selected_boxes()
+            for box in self.selected_boxes():
+                for item in self.part_items():
+                    if box.sceneBoundingRect().contains(item.pos()) and item not in items_to_move:
+                        items_to_move.append(item)
+            self._move_start = {i: QPointF(i.pos()) for i in items_to_move}
 
     def mouseReleaseEvent(self, event) -> None:
         super().mouseReleaseEvent(event)
@@ -274,6 +344,7 @@ class BoardScene(QGraphicsScene):
             "app": "HarnessBoard",
             "version": 2,
             "labels_visible": self.labels_visible,
+            "boxes": [b.to_dict() for b in self.harness_boxes()],
             "parts": [item.to_dict() for item in parts],
             "cables": [cable.to_dict(part_index) for cable in self.cable_items()],
         }
@@ -283,6 +354,11 @@ class BoardScene(QGraphicsScene):
         self.clear()
         self.undo_stack.clear()
         self.labels_visible = bool(data.get("labels_visible", True))
+        for entry in data.get("boxes", []):
+            box = HarnessBoxItem()
+            box.apply_dict(entry)
+            self.addItem(box)
+
         loaded_parts: list[PartItem | None] = []
         for entry in data.get("parts", []):
             name = str(entry.get("name", ""))
@@ -458,10 +534,25 @@ class BoardView(QGraphicsView):
         self.cancel_cable()
 
     # --- editing operations ------------------------------------------------
+    def add_harness_box(self) -> None:
+        center = self.mapToScene(self.viewport().rect().center())
+        box = HarnessBoxItem("New Harness")
+        # Make it large enough to be visible
+        box.setRect(0, 0, 1000, 800)
+        box.setPos(center.x() - 500, center.y() - 400)
+        self.board_scene.undo_stack.push(AddPartsCommand(self.board_scene, [box], "Add Harness Box"))
+        self.board_scene.clearSelection()
+        box.setSelected(True)
+
     def delete_selected(self) -> None:
         parts = self.board_scene.selected_parts()
         cables = self.board_scene.selected_cables()
-        items = parts + cables
+        boxes = self.board_scene.selected_boxes()
+        for box in boxes:
+            for item in self.board_scene.part_items():
+                if box.sceneBoundingRect().contains(item.pos()) and item not in parts:
+                    parts.append(item)
+        items = parts + cables + boxes
         if items:
             names = [item.part.name for item in parts]
             self.board_scene.undo_stack.push(
@@ -484,16 +575,27 @@ class BoardView(QGraphicsView):
         self.statusMessage.emit(f"Orientation → {target}")
 
     def copy_selected(self) -> None:
+        boxes = self.board_scene.selected_boxes()
         items = self.board_scene.selected_parts()
+        for box in boxes:
+            for item in self.board_scene.part_items():
+                if box.sceneBoundingRect().contains(item.pos()) and item not in items:
+                    items.append(item)
         self._clipboard = [item.to_dict() for item in items]
         self._clipboard_parts = {item.part.name: item.part for item in items}
+        self._clipboard_boxes = [b.to_dict() for b in boxes]
 
     def paste(self) -> None:
-        if not self._clipboard:
+        if not getattr(self, "_clipboard", None) and not getattr(self, "_clipboard_boxes", None):
             return
         new_items = []
-        for entry in self._clipboard:
-            part = self._clipboard_parts.get(entry["name"])
+        for entry in getattr(self, "_clipboard_boxes", []):
+            box = HarnessBoxItem()
+            box.apply_dict(entry)
+            box.setPos(box.pos() + QPointF(24, 24))
+            new_items.append(box)
+        for entry in getattr(self, "_clipboard", []):
+            part = getattr(self, "_clipboard_parts", {}).get(entry["name"])
             if part is None:
                 continue
             item = PartItem(part, self.board_scene.labels_visible)

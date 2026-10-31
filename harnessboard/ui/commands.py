@@ -43,11 +43,19 @@ class MovePartsCommand(QUndoCommand):
 
     def redo(self) -> None:
         for item, (_old, new) in self._moves.items():
+            if hasattr(item, "_block_moves"):
+                item._block_moves = True
             item.setPos(QPointF(new))
+            if hasattr(item, "_block_moves"):
+                item._block_moves = False
 
     def undo(self) -> None:
         for item, (old, _new) in self._moves.items():
+            if hasattr(item, "_block_moves"):
+                item._block_moves = True
             item.setPos(QPointF(old))
+            if hasattr(item, "_block_moves"):
+                item._block_moves = False
 
 
 class RotatePartsCommand(QUndoCommand):

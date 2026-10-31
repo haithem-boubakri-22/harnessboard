@@ -118,6 +118,8 @@ class MainWindow(QMainWindow):
         self._add_action(edit_menu, "&Delete selected\tDel", None, self.view.delete_selected)
         self._add_action(edit_menu, "Rotate C&W\tR", None, lambda: self.view.rotate_selected(15))
         self._add_action(edit_menu, "Rotate CC&W\tShift+R", None, lambda: self.view.rotate_selected(-15))
+        edit_menu.addSeparator()
+        self._add_action(edit_menu, "Add Harness &Block", None, self.view.add_harness_box)
 
         view_menu = self.menuBar().addMenu("&View")
         self.labels_action = QAction("Show &labels", self, checkable=True, checked=True)
