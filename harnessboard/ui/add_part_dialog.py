@@ -52,7 +52,13 @@ class AddPartDialog(QDialog):
         form.addRow("Category:", self.category_combo)
 
         self.icon_edit, icon_row = self._path_row("Images (*.png *.jpg *.jpeg *.bmp *.svg)", preview=True)
-        form.addRow("Icon image:", icon_row)
+        form.addRow("Standard Icon:", icon_row)
+
+        self.icon_up_edit, icon_up_row = self._path_row("Images (*.png *.jpg *.jpeg *.bmp *.svg)", preview=True)
+        form.addRow("Face Up Icon (Optional):", icon_up_row)
+
+        self.icon_down_edit, icon_down_row = self._path_row("Images (*.png *.jpg *.jpeg *.bmp *.svg)", preview=True)
+        form.addRow("Face Down Icon (Optional):", icon_down_row)
 
         outer.addLayout(form)
         outer.addWidget(QLabel("Step files (the app automatically selects the lowest Z):"))
@@ -109,7 +115,8 @@ class AddPartDialog(QDialog):
                     self._update_preview(path)
         button.clicked.connect(browse)
         if preview:
-            edit.textChanged.connect(self._update_preview)
+            # Use a lambda to ignore the text argument and pass the path
+            edit.textChanged.connect(lambda text: self._update_preview(text))
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
@@ -123,23 +130,35 @@ class AddPartDialog(QDialog):
             return
         pixmap = QPixmap(path)
         if not pixmap.isNull():
+            # We only have one preview label, so we just update it
             self.icon_preview.setPixmap(pixmap.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
     def _scan_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Choose step folder")
+        folder = QFileDialog.getExistingDirectory(self, "Choose folder")
         if not folder:
             return
-        files = [p for p in sorted(Path(folder).iterdir()) if p.is_file() and p.suffix.lower() in STEP_SUFFIXES]
-        if not files:
-            QMessageBox.information(self, "No step files", "That folder contains no .step / .stp files.")
+            
+        path = Path(folder)
+        step_files = [p for p in sorted(path.iterdir()) if p.is_file() and p.suffix.lower() in STEP_SUFFIXES]
+        
+        # Auto-detect icons in the folder
+        for file in path.iterdir():
+            if not file.is_file():
+                continue
+            f_lower = file.name.lower()
+            if "up" in f_lower and not self.icon_up_edit.text():
+                self.icon_up_edit.setText(str(file))
+            elif "down" in f_lower and not self.icon_down_edit.text():
+                self.icon_down_edit.setText(str(file))
+            elif "icon" in f_lower and not self.icon_edit.text():
+                self.icon_edit.setText(str(file))
+
+        if step_files:
+            self._add_paths(step_files)
+        elif not self.icon_edit.text():
+            # If there are no step files AND no icons, warn the user
+            QMessageBox.information(self, "Empty folder", "That folder contains no step files or icons.")
             return
-        self._add_paths(files)
-        if not self.icon_edit.text():
-            for candidate in ("icon.png", "icon.jpg", "icon.jpeg", "icon.svg"):
-                p = Path(folder) / candidate
-                if p.is_file():
-                    self.icon_edit.setText(str(p))
-                    break
 
     def _add_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Choose step files", "", "Step files (*.step *.stp)")
@@ -182,6 +201,8 @@ class AddPartDialog(QDialog):
         name = self.name_edit.text().strip()
         category = self.category_combo.currentText().strip()
         icon_path = Path(self.icon_edit.text().strip()) if self.icon_edit.text() else None
+        icon_up_path = Path(self.icon_up_edit.text().strip()) if self.icon_up_edit.text() else None
+        icon_down_path = Path(self.icon_down_edit.text().strip()) if self.icon_down_edit.text() else None
 
         if not valid_folder_name(name) or not valid_folder_name(category):
             QMessageBox.warning(self, "Invalid name", 'Name and category must not be empty or contain <>:"/\\|?*')
@@ -194,21 +215,23 @@ class AddPartDialog(QDialog):
             return
 
         matched = [e for e in self._entries if e["orient"] is not None]
-        if not matched:
-            QMessageBox.warning(self, "No step files", "Add at least one step file matching <any>_<orient>_Z<z>.step.")
-            return
-
-        # THE NEW LOGIC: Find the minimal Z across all matched files
-        min_z = min(e["z"] for e in matched)
-        selected = [e for e in matched if e["z"] == min_z]
-
-        # Check for duplicate orientations at this minimal Z
-        seen_orients = set()
-        for e in selected:
-            if e["orient"] in seen_orients:
-                QMessageBox.warning(self, "Duplicate variant", f"Two files map to {e['orient']} at Z={min_z}.\nRemove one or rename.")
-                return
-            seen_orients.add(e["orient"])
+        
+        # If we have step files, find the minimal Z
+        if matched:
+            min_z = min(e["z"] for e in matched)
+            selected = [e for e in matched if e["z"] == min_z]
+            
+            # Check for duplicate orientations at this minimal Z
+            seen_orients = set()
+            for e in selected:
+                if e["orient"] in seen_orients:
+                    QMessageBox.warning(self, "Duplicate variant", f"Two files map to {e['orient']} at Z={min_z}.\nRemove one or rename.")
+                    return
+                seen_orients.add(e["orient"])
+        else:
+            # No step files - this is allowed if we have an icon
+            min_z = None
+            selected = []
 
         if self._library.root is None:
             QMessageBox.warning(self, "No library", "Set the library folder in Settings first.")
@@ -218,18 +241,22 @@ class AddPartDialog(QDialog):
         try:
             folder.mkdir(parents=True, exist_ok=False)
             shutil.copy2(icon_path, folder / f"icon{icon_path.suffix.lower()}")
+            if icon_up_path and icon_up_path.is_file():
+                shutil.copy2(icon_up_path, folder / f"icon_up{icon_up_path.suffix.lower()}")
+            if icon_down_path and icon_down_path.is_file():
+                shutil.copy2(icon_down_path, folder / f"icon_down{icon_down_path.suffix.lower()}")
 
             steps_map: dict[str, str] = {}
             for e in selected:
                 shutil.copy2(e["src"], folder / e["filename"])
                 steps_map[e["orient"]] = e["filename"]
 
+            meta = {"category": category, "z_depth": min_z}
+            if steps_map:
+                meta["steps"] = steps_map
+
             (folder / "part.json").write_text(
-                json.dumps({
-                    "category": category,
-                    "z_depth": min_z,
-                    "steps": steps_map
-                }, indent=2),
+                json.dumps(meta, indent=2),
                 encoding="utf-8",
             )
         except OSError as exc:

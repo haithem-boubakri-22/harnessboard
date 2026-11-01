@@ -21,6 +21,7 @@ from harnessboard.ui.commands import (
     RemovePartsCommand,
     RotatePartsCommand,
     SetOrientationCommand,
+    SetFaceStateCommand,
 )
 
 ICON_SIZE = 64
@@ -34,8 +35,14 @@ _BIT_TOGGLE = {
 }
 
 
-def part_pixmap(part: Part) -> QPixmap:
-    pixmap = QPixmap(str(part.icon_path)) if part.icon_path else QPixmap()
+def part_pixmap(part: Part, face_state: str = "std") -> QPixmap:
+    path = part.icon_path
+    if face_state == "up" and part.icon_up_path:
+        path = part.icon_up_path
+    elif face_state == "down" and part.icon_down_path:
+        path = part.icon_down_path
+        
+    pixmap = QPixmap(str(path)) if path else QPixmap()
     if pixmap.isNull():
         pixmap = QPixmap(ICON_SIZE, ICON_SIZE)
         pixmap.fill(QColor("#c0c0c0"))
@@ -53,6 +60,7 @@ class PartItem(QGraphicsPixmapItem):
         super().__init__(part_pixmap(part))
         self.part = part
         self.orientation = "std"
+        self.face_state = "std"  # "std", "up", "down"
         self._labels_visible = labels_visible
         w, h = self.pixmap().width(), self.pixmap().height()
         self.setOffset(-w / 2, -h / 2)
@@ -78,6 +86,27 @@ class PartItem(QGraphicsPixmapItem):
         self.badge.setVisible(False)
 
     # --- orientation ------------------------------------------------
+    def set_face_state(self, state: str) -> None:
+        # Block switching to a face if the image doesn't exist
+        if state == "up" and not self.part.icon_up_path:
+            return
+        if state == "down" and not self.part.icon_down_path:
+            return
+            
+        if state not in ("std", "up", "down"):
+            state = "std"
+        self.face_state = state
+        self._apply_orientation_transform()
+
+    def mouseReleaseEvent(self, event) -> None:
+        # Detect a click (without dragging) to cycle the face state
+        if event.button() == Qt.MouseButton.LeftButton:
+            # We check if the item actually moved. If not, it was a click.
+            # (Note: PartItem is already at its new position by the time this fires, 
+            # so we rely on a small distance check or just let the user double click)
+            pass
+        super().mouseReleaseEvent(event)
+
     def set_orientation(self, orient: str) -> None:
         if orient not in ORIENTATIONS:
             orient = "std"
@@ -87,7 +116,7 @@ class PartItem(QGraphicsPixmapItem):
         self.update()
 
     def _apply_orientation_transform(self) -> None:
-        base_pixmap = part_pixmap(self.part)
+        base_pixmap = part_pixmap(self.part, self.face_state)
         transform = QTransform()
         
         if self.orientation in ("mir", "rot_mir"):
@@ -143,6 +172,7 @@ class PartItem(QGraphicsPixmapItem):
             "y": self.pos().y(),
             "rotation": self.rotation(),
             "orientation": self.orientation,
+            "face_state": self.face_state,
             "label_x": self.label.pos().x(),
             "label_y": self.label.pos().y(),
         }
@@ -153,6 +183,7 @@ class PartItem(QGraphicsPixmapItem):
         if "label_x" in data:
             self.label.setPos(float(data["label_x"]), float(data["label_y"]))
         self.set_orientation(str(data.get("orientation", "std")))
+        self.set_face_state(str(data.get("face_state", "std")))
 
 
 
@@ -327,6 +358,25 @@ class BoardScene(QGraphicsScene):
                 self.undo_stack.push(SetOrientationCommand(items, o))
             )
 
+        menu.addSeparator()
+        
+        # Face State submenu
+        face_menu = menu.addMenu("Face State")
+        common_face = selected[0].face_state
+        for item in selected[1:]:
+            if item.face_state != common_face:
+                common_face = None
+                break
+                
+        for f_state, f_label in (("std", "Standard"), ("up", "Face Up"), ("down", "Face Down")):
+            action = face_menu.addAction(f_label)
+            action.setCheckable(True)
+            action.setChecked(common_face == f_state)
+            action.triggered.connect(
+                lambda checked=False, s=f_state, items=list(selected): 
+                self.undo_stack.push(SetFaceStateCommand(items, s))
+            )
+            
         menu.addSeparator()
         menu.addAction(
             "Rotate 15° CW (R)",
@@ -584,6 +634,12 @@ class BoardView(QGraphicsView):
         if items:
             self.board_scene.undo_stack.push(RotatePartsCommand(items, delta))
 
+    def set_face_state(self, state: str) -> None:
+        items = self.board_scene.selected_parts()
+        if items:
+            self.board_scene.undo_stack.push(SetFaceStateCommand(items, state))
+            self.statusMessage.emit(f"Face state → {state}")
+
     def _toggle_orientation_bit(self, bit: str) -> None:
         items = self.board_scene.selected_parts()
         if not items:
@@ -787,6 +843,12 @@ class BoardView(QGraphicsView):
             self._toggle_orientation_bit("mirror")
         elif key == Qt.Key.Key_O:
             self._toggle_orientation_bit("rotate")
+        elif key == Qt.Key.Key_U:
+            self.set_face_state("up")
+        elif key == Qt.Key.Key_D:
+            self.set_face_state("down")
+        elif key == Qt.Key.Key_S:
+            self.set_face_state("std")
         elif event.matches(QKeySequence.StandardKey.Copy):
             self.copy_selected()
         elif event.matches(QKeySequence.StandardKey.Paste):

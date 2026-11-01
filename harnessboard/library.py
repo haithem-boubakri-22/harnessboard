@@ -18,6 +18,8 @@ class Part:
     category: str             # from folder tree
     folder: Path
     icon_path: Path | None = None
+    icon_up_path: Path | None = None
+    icon_down_path: Path | None = None
     # Legacy single-file fields (kept for back-compat):
     step_path: Path | None = None
     z_depth: float | None = None
@@ -151,10 +153,16 @@ def scan_library(root: str | Path) -> Library:
         )
         for f in filenames:
             suffix = Path(f).suffix.lower()
-            if part.icon_path is None and suffix in ICON_EXTENSIONS:
-                part.icon_path = folder / f
+            f_lower = f.lower()
+            
+            if suffix in ICON_EXTENSIONS:
+                if "up" in f_lower:
+                    part.icon_up_path = folder / f
+                elif "down" in f_lower:
+                    part.icon_down_path = folder / f
+                elif "icon" in f_lower or "logo" in f_lower:
+                    part.icon_path = folder / f
             elif part.step_path is None and suffix in STEP_EXTENSIONS:
-                # legacy single-step fallback
                 part.step_path = folder / f
 
         meta_file = folder / "part.json"

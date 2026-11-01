@@ -90,3 +90,18 @@ class SetOrientationCommand(QUndoCommand):
     def undo(self) -> None:
         for item, old in self._changes:
             item.set_orientation(old)
+
+class SetFaceStateCommand(QUndoCommand):
+    """Change the face state (std / up / down) of placed part(s)."""
+    def __init__(self, items, new_state: str) -> None:
+        super().__init__(f"Change Face to {new_state}")
+        self._changes = [(item, item.face_state) for item in items]
+        self._new = new_state
+
+    def redo(self) -> None:
+        for item, _old in self._changes:
+            item.set_face_state(self._new)
+
+    def undo(self) -> None:
+        for item, old in self._changes:
+            item.set_face_state(old)
