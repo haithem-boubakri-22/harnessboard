@@ -424,6 +424,9 @@ class BoardView(QGraphicsView):
         self._cable_points: list[QPointF] = []
         self._cable_start_item: PartItem | None = None
         self._cable_preview = None
+        self._drawing_box = False
+        self._box_start = None
+        self._preview_box = None
 
     # --- background grid -------------------------------------------------
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
@@ -559,16 +562,6 @@ class BoardView(QGraphicsView):
         self.cancel_cable()
 
     # --- editing operations ------------------------------------------------
-    def add_harness_box(self) -> None:
-        center = self.mapToScene(self.viewport().rect().center())
-        box = HarnessBoxItem("New Harness")
-        # Make it large enough to be visible
-        box.setRect(0, 0, 1000, 800)
-        box.setPos(center.x() - 500, center.y() - 400)
-        self.board_scene.undo_stack.push(AddPartsCommand(self.board_scene, [box], "Add Harness Box"))
-        self.board_scene.clearSelection()
-        box.setSelected(True)
-
     def delete_selected(self) -> None:
         parts = self.board_scene.selected_parts()
         cables = self.board_scene.selected_cables()
@@ -656,6 +649,23 @@ class BoardView(QGraphicsView):
 
     # --- mouse ------------------------------------------------------------
     def mousePressEvent(self, event) -> None:
+        # --- Ctrl+Drag to draw Harness Block ---
+        if event.button() == Qt.MouseButton.LeftButton and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            scene_pos = self.mapToScene(event.position().toPoint())
+            items_under_cursor = self.board_scene.items(scene_pos)
+            # Only draw if clicking on empty space (no parts, cables, or existing boxes)
+            if not any(isinstance(i, (PartItem, CableItem, HarnessBoxItem)) for i in items_under_cursor):
+                self._drawing_box = True
+                self._box_start = scene_pos
+                self._preview_box = QGraphicsRectItem()
+                pen = QPen(QColor("#d81b60"), 1.5, Qt.PenStyle.DashLine)
+                self._preview_box.setPen(pen)
+                self._preview_box.setBrush(QColor(216, 27, 96, 20))
+                self._preview_box.setZValue(1000)
+                self.board_scene.addItem(self._preview_box)
+                event.accept()
+                return
+
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_last = event.position()
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -700,6 +710,13 @@ class BoardView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
+        if self._drawing_box and self._preview_box:
+            current_pos = self.mapToScene(event.position().toPoint())
+            rect = QRectF(self._box_start, current_pos).normalized()
+            self._preview_box.setRect(rect)
+            event.accept()
+            return
+
         if self._pan_last is not None:
             delta = event.position() - self._pan_last
             self._pan_last = event.position()
@@ -725,6 +742,25 @@ class BoardView(QGraphicsView):
         super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._drawing_box and event.button() == Qt.MouseButton.LeftButton:
+            self._drawing_box = False
+            rect = self._preview_box.rect()
+            self.board_scene.removeItem(self._preview_box)
+            self._preview_box = None
+            
+            # Only create the box if it's large enough (prevents accidental clicks)
+            if rect.width() > 50 and rect.height() > 50:
+                box = HarnessBoxItem("New Harness")
+                box.setRect(0, 0, rect.width(), rect.height())
+                box.setPos(rect.topLeft())
+                self.board_scene.undo_stack.push(
+                    AddPartsCommand(self.board_scene, [box], "Draw Harness Block")
+                )
+                self.board_scene.clearSelection()
+                box.setSelected(True)
+            event.accept()
+            return
+
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_last = None
             self.viewport().unsetCursor()
