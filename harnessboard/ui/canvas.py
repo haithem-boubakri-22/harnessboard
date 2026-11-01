@@ -204,11 +204,53 @@ class HarnessBoxItem(QGraphicsRectItem):
         self._block_moves = False
         self.has_casing = False
         self.casing_z = 30.0
+        self._resizing = False
+        self._resize_start_pos = None
+        self._resize_start_rect = None
         
         self.label = QGraphicsSimpleTextItem(name, self)
         self.label.setFont(QFont("", 10, QFont.Weight.Bold))
         self.label.setBrush(QColor("#000000"))
         self.label.setPos(rect.left() + 15, rect.top() + 15)
+
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Check if clicking the bottom-right resize handle (15x15 area)
+            if (event.pos().x() >= self.rect().width() - 15 and 
+                event.pos().y() >= self.rect().height() - 15):
+                self._resizing = True
+                self._resize_start_pos = event.pos()
+                self._resize_start_rect = self.rect()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._resizing:
+            delta = event.pos() - self._resize_start_pos
+            new_w = max(200, self._resize_start_rect.width() + delta.x())
+            new_h = max(150, self._resize_start_rect.height() + delta.y())
+            self.setRect(0, 0, new_w, new_h)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._resizing:
+            self._resizing = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def hoverMoveEvent(self, event):
+        # Change cursor to diagonal resize when hovering over the handle
+        if (event.pos().x() >= self.rect().width() - 15 and 
+            event.pos().y() >= self.rect().height() - 15):
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().hoverMoveEvent(event)
 
     def paint(self, painter: QPainter, option, widget=None):
         # Draw the base rectangle
@@ -231,6 +273,19 @@ class HarnessBoxItem(QGraphicsRectItem):
             QPointF(rect.left() + block_w * 0.7, rect.top()),
             QPointF(rect.left() + block_w * 0.7, rect.top() + block_h)
         )
+        
+        # Draw the resize handle in the bottom-right corner
+        if self.isSelected() or self._resizing:
+            painter.setPen(QPen(QColor("#d81b60"), 1.0))
+            painter.setBrush(QColor("#d81b60"))
+            handle_size = 10
+            hr = QRectF(
+                rect.right() - handle_size, 
+                rect.bottom() - handle_size, 
+                handle_size, 
+                handle_size
+            )
+            painter.drawRect(hr)
 
     def update_label(self):
         text = self.name
