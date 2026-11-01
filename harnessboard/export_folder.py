@@ -12,17 +12,26 @@ from harnessboard.pdf_export import export_pdf
 
 def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
     out_dir = Path(out_dir)
+    steps_dir = out_dir / "steps"
     mcam_dir = out_dir / "mcam"
     out_dir.mkdir(parents=True, exist_ok=True)
     mcam_dir.mkdir(exist_ok=True)
+    
+    # Clean old steps folder to prevent ghost files
+    if steps_dir.exists():
+        shutil.rmtree(steps_dir)
+    steps_dir.mkdir(exist_ok=True)
 
     info: dict = {}
+    harness_name = "layout"
     if harness is not None:
         info = {
             "customer": harness.customer,
             "number": harness.number,
             "type": harness.htype,
         }
+        # Sanitize the name just in case it has weird characters
+        harness_name = "".join(c for c in harness.number if c not in '<>:"/\\|?*')
 
     # 1. Map parts to their bounding boxes
     boxes = scene.harness_boxes()
@@ -31,7 +40,7 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
         assigned = "Unassigned"
         for box in boxes:
             if box.sceneBoundingRect().contains(item.pos()):
-                assigned = box.name.replace("/", "-") # safety for folder names
+                assigned = box.name.replace("/", "-")
                 break
         part_to_box[item] = assigned
 
@@ -45,8 +54,7 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
         orientation = item.orientation
         box_name = part_to_box[item]
         
-        # Create folder for this box
-        box_steps_dir = out_dir / "steps" / box_name
+        box_steps_dir = steps_dir / box_name
         box_steps_dir.mkdir(parents=True, exist_ok=True)
         
         key = (box_name, part.name, orientation)
@@ -54,7 +62,6 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
             continue
         seen.add(key)
         
-        # Resolve step: single Z now
         z = part.z_depth
         step_path = part.resolve_step(orientation, z)
         
@@ -67,17 +74,16 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
             shutil.copy2(step_path, dest)
             copied_steps.append(f"{box_name}/{dest.name}")
             
-        # Copy MCAM
         for mcam in part.folder.glob("*.mcam"):
             dest_mcam = mcam_dir / mcam.name
             if not dest_mcam.exists():
                 shutil.copy2(mcam, dest_mcam)
 
-    # 3. Exports
+    # 3. Exports with clean naming
     try:
-        export_pdf(out_dir / "layout.pdf", scene, info, bom_parts, bom_cables)
-        export_bom(out_dir / "BOM.xlsx", bom_parts, bom_cables, info)
-        export_bom_csv(out_dir / "BOM.csv", bom_parts, bom_cables, info)
+        export_pdf(out_dir / f"{harness_name}.pdf", scene, info, bom_parts, bom_cables)
+        export_bom(out_dir / f"BOM_{harness_name}.xlsx", bom_parts, bom_cables, info)
+        export_bom_csv(out_dir / f"BOM_{harness_name}.csv", bom_parts, bom_cables, info)
     except Exception as exc:
         return {"error": str(exc)}
 

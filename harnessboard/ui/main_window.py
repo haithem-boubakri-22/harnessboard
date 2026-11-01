@@ -42,7 +42,6 @@ class MainWindow(QMainWindow):
 
         self.undo_stack = QUndoStack(self)
         self.undo_stack.cleanChanged.connect(self._update_title)
-        self.undo_stack.indexChanged.connect(self._sync_step_files)
         self.undo_stack.indexChanged.connect(self._refresh_bom)
 
         self.scene = BoardScene(self.undo_stack, self)
@@ -92,7 +91,7 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu, "Save layout &as…", QKeySequence.StandardKey.SaveAs, self.save_file_as)
         file_menu.addSeparator()
         self._add_action(file_menu, "Export &BOM to Excel…", QKeySequence("Ctrl+E"), self.export_bom_excel)
-        self._add_action(file_menu, "Export &folder (PDF + BOM + STEP + MCAM)…", QKeySequence("Ctrl+Shift+E"), self.export_full_folder)
+        self._add_action(file_menu, "&Export (PDF + BOM + STEP)", QKeySequence("Ctrl+Shift+E"), self.export_full_folder)
         file_menu.addSeparator()
         self._add_action(file_menu, "E&xit", None, self.close)
 
@@ -232,23 +231,6 @@ class MainWindow(QMainWindow):
         self._refresh_bom()
         self._update_title()
 
-    def _sync_step_files(self) -> None:
-        """Copy the .step of every placed part into the harness folder (SPEC §3)."""
-        if self.harness is None:
-            return
-        for item in self.scene.part_items():
-            part = item.part
-            if part.step_path is None or not part.step_path.is_file():
-                continue
-            dest = self.harness.folder / part.step_path.name
-            if not dest.exists():
-                try:
-                    shutil.copy2(part.step_path, dest)
-                    self.statusBar().showMessage(f"Copied {dest.name} to harness folder")
-                except OSError as exc:
-                    QMessageBox.warning(
-                        self, "Copy failed", f"Could not copy {part.step_path.name}:\n{exc}"
-                    )
 
     def _refresh_bom(self) -> None:
         for cable in self.scene.cable_items():
@@ -285,90 +267,45 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(f"BOM exported: {path}")
 
-    def export_full_folder(self) -> None:
-        """Export PDF + BOM (xlsx + csv) + STEP + MCAM to one folder."""
-        from datetime import datetime
+    def export_full_folder(self, silent=False) -> bool:
+        print(f"DEBUG: export_full_folder called. silent={silent}")
+        if self.harness is None:
+            print("DEBUG: export_full_folder returned early because harness is None")
+            return False
 
         parts = bom_parts(self.scene)
         cables = bom_cables(self.scene)
-        if not parts and not cables:
-            QMessageBox.information(self, "Empty board", "Nothing to export yet.")
-            return
-        if self.harness is not None:
-            default_dir = self.harness.folder / "Export"
-        else:
-            base = Path(self.settings.projects_root or ".")
-            default_dir = base / "Export"
-            
-        chosen = QFileDialog.getExistingDirectory(
-            self, "Choose export folder", str(default_dir.parent)
-        )
-        if not chosen:
-            return
-        out_dir = Path(chosen) / default_dir.name
-        
-        if out_dir.exists():
-            answer = QMessageBox.question(
-                self, "Folder exists",
-                f"The folder '{out_dir.name}' already exists.\n\n"
-                "Do you want to completely overwrite it?\n"
-                "(Old files inside it will be deleted to prevent ghost files).",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-            # Clean the folder so deleted parts don't leave stale files behind
-            import shutil
-            try:
-                shutil.rmtree(out_dir)
-            except OSError as exc:
-                QMessageBox.critical(self, "Delete failed", f"Could not clear old export folder:\n{exc}")
-                return
+        out_dir = self.harness.folder
+
         result = export_folder(out_dir, self.scene, self.harness, parts, cables)
+        
         if "error" in result:
-            QMessageBox.critical(self, "Export failed", result["error"])
-            return
-        lines = [
-            f"Exported to: {result['folder']}",
-            f"  STEP files: {result['steps_copied']}",
-            f"  MCAM files: {result['mcam_copied']}",
-        ]
-        if result["missing"]:
-            lines.append("")
-            lines.append("Missing step files (skipped):")
-            lines.extend(f"  • {m}" for m in result["missing"])
-        QMessageBox.information(self, "Export complete", "\n".join(lines))
+            print(f"EXPORT ERROR: {result['error']}")
+            if not silent:
+                QMessageBox.critical(self, "Export failed", result["error"])
+            return False
+        
+        if not silent:
+            lines = [
+                f"Exported to: {result['folder']}",
+                f"  STEP files: {result['steps_copied']}",
+                f"  MCAM files: {result['mcam_copied']}",
+            ]
+            if result["missing"]:
+                lines.append("")
+                lines.append("Missing step files (skipped):")
+                for m in result["missing"]:
+                    lines.append(f"  - {m}")
+            QMessageBox.information(self, "Export complete", "\n".join(lines))
+            
         self.statusBar().showMessage(f"Exported to {result['folder']}")
+        return True
+
+
 
     def _on_parts_deleted(self, names: list[str]) -> None:
-        """SPEC decision: deleting the last instance asks whether to remove the file."""
-        if self.harness is None:
-            return
-        remaining = {item.part.name for item in self.scene.part_items()}
-        orphan_files = []
-        for name in sorted(set(names) - remaining):
-            part = self.library.part_by_name(name)
-            if part is None or part.step_path is None:
-                continue
-            dest = self.harness.folder / part.step_path.name
-            if dest.is_file():
-                orphan_files.append(dest)
-        if not orphan_files:
-            return
-        file_list = "\n".join(f"  • {f.name}" for f in orphan_files)
-        answer = QMessageBox.question(
-            self,
-            "Remove 3D files too?",
-            "These parts are no longer on the board. Also remove their 3D models "
-            f"from the harness folder?\n\n{file_list}",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            for f in orphan_files:
-                try:
-                    f.unlink()
-                except OSError as exc:
-                    QMessageBox.warning(self, "Delete failed", f"{f.name}:\n{exc}")
+        # Files are cleaned up automatically on the next Save/Export.
+        pass
 
     # ------------------------------------------------------------ file ops
     def _confirm_discard(self) -> bool:
@@ -411,8 +348,28 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Opened {path}")
 
     def save_file(self) -> bool:
+        if self.harness is None:
+            return self._save_as_new_harness()
+            
         if self.current_file is None:
-            return self.save_file_as()
+            self.current_file = self.harness.layout_file
+            
+        return self._write_to(self.current_file)
+
+    def _save_as_new_harness(self) -> bool:
+        if not self._ensure_projects_root():
+            return False
+            
+        dialog = NewHarnessDialog(self.settings.projects_root, self)
+        if not dialog.exec() or dialog.harness is None:
+            return False
+
+        # Set harness but DO NOT clear the scene (so we save what the user drew)
+        self.harness = dialog.harness
+        self.current_file = self.harness.layout_file
+        self._update_title()
+
+        # Save current scene to the new harness folder
         return self._write_to(self.current_file)
 
     def save_file_as(self) -> bool:
@@ -433,10 +390,29 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.critical(self, "Save failed", f"Could not write the file:\n{exc}")
             return False
+
         self.undo_stack.setClean()
         self._update_title()
-        self.statusBar().showMessage(f"Saved {path}")
+
+        # Trigger export if we are saving a valid harness layout
+        print(f"DEBUG: _write_to reached. Harness is None? {self.harness is None}")
+        if self.harness is not None:
+            try:
+                success = self.export_full_folder(silent=True)
+                if not success:
+                    QMessageBox.warning(self, "Export Warning", "Layout saved, but PDF/BOM/STEP generation failed. Check the console for details.")
+                else:
+                    self.statusBar().showMessage(f"Saved and synced files to {self.harness.folder}")
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                QMessageBox.warning(self, "Export Error", f"Layout saved, but an error occurred during export:\n{e}")
+        else:
+            self.statusBar().showMessage(f"Saved {path}")
+
         return True
+
+
 
     def closeEvent(self, event) -> None:
         if self._confirm_discard():
