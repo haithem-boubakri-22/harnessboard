@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QTransform, QBrush
 from PySide6.QtWidgets import (
+    QMessageBox,
     QGraphicsRectItem,
     QGraphicsItem,
     QGraphicsPixmapItem,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from harnessboard.library import ORIENTATIONS, Library, Part
 from harnessboard.ui.cable import SNAP_DISTANCE, CableItem, rounded_path
+from harnessboard.ui.harness_dialogs import HarnessBlockPropertiesDialog
 from harnessboard.ui.commands import (
     AddPartsCommand,
     MovePartsCommand,
@@ -200,6 +202,8 @@ class HarnessBoxItem(QGraphicsRectItem):
         self.setBrush(QColor(216, 27, 96, 10))  # Very faint fill
         self.setZValue(-10)
         self._block_moves = False
+        self.has_casing = False
+        self.casing_z = 30.0
         
         self.label = QGraphicsSimpleTextItem(name, self)
         self.label.setFont(QFont("", 10, QFont.Weight.Bold))
@@ -228,10 +232,16 @@ class HarnessBoxItem(QGraphicsRectItem):
             QPointF(rect.left() + block_w * 0.7, rect.top() + block_h)
         )
 
+    def update_label(self):
+        text = self.name
+        if self.has_casing:
+            text += f" (Casing Z{self.casing_z:g})"
+        self.label.setText(text)
+        self.update()
+
     def set_name(self, new_name: str):
         self.name = new_name
-        self.label.setText(new_name)
-        self.update() # Repaint the table to fit the new name
+        self.update_label() # Repaint the table to fit the new name
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
@@ -246,10 +256,33 @@ class HarnessBoxItem(QGraphicsRectItem):
         return super().itemChange(change, value)
 
     def mouseDoubleClickEvent(self, event):
-        text, ok = QInputDialog.getText(None, "Harness Name", "Enter harness number:", text=self.name)
-        if ok and text.strip():
-            self.set_name(text.strip())
+        self.open_properties()
         super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu()
+        action = menu.addAction("Properties...")
+        action.triggered.connect(self.open_properties)
+        menu.exec(event.screenPos())
+
+    def open_properties(self):
+        dlg = HarnessBlockPropertiesDialog(self.name, self.has_casing, self.casing_z)
+        if dlg.exec():
+            new_name, new_casing, new_z = dlg.get_values()
+            if new_name:
+                # Duplicate check
+                scene = self.scene()
+                if scene is not None:
+                    for box in scene.harness_boxes():
+                        if box is not self and box.name.lower() == new_name.lower():
+                            msg = "A harness block named '" + new_name + "' already exists." + chr(10) + "Names must be unique."
+                            QMessageBox.warning(None, "Duplicate Name", msg)
+                            return
+                self.name = new_name
+            
+            self.has_casing = new_casing
+            self.casing_z = new_z
+            self.update_label()
 
     def to_dict(self) -> dict:
         r = self.rect()
@@ -258,13 +291,18 @@ class HarnessBoxItem(QGraphicsRectItem):
             "x": self.pos().x(),
             "y": self.pos().y(),
             "w": r.width(),
-            "h": r.height()
+            "h": r.height(),
+            "has_casing": self.has_casing,
+            "casing_z": self.casing_z
         }
 
     def apply_dict(self, data: dict):
         self.setPos(float(data.get("x", 0)), float(data.get("y", 0)))
         self.setRect(0, 0, float(data.get("w", 800)), float(data.get("h", 600)))
-        self.set_name(str(data.get("name", "Harness")))
+        self.name = str(data.get("name", "Harness"))
+        self.has_casing = bool(data.get("has_casing", False))
+        self.casing_z = float(data.get("casing_z", 30.0))
+        self.update_label()
         self.label.setPos(10, 10)
 
 
@@ -281,6 +319,13 @@ class BoardScene(QGraphicsScene):
 
     def harness_boxes(self) -> list[HarnessBoxItem]:
         return [i for i in self.items() if isinstance(i, HarnessBoxItem)]
+
+    def next_harness_name(self) -> str:
+        existing = {b.name.lower() for b in self.harness_boxes()}
+        i = 1
+        while ("harness " + str(i)) in existing:
+            i += 1
+        return "Harness " + str(i)
         
     def selected_boxes(self) -> list[HarnessBoxItem]:
         return [i for i in self.selectedItems() if isinstance(i, HarnessBoxItem)]
@@ -326,6 +371,12 @@ class BoardScene(QGraphicsScene):
 
     # --- context menu (NEW) -------------------------------------------
     def contextMenuEvent(self, event) -> None:
+        # If right-clicking a Harness Block, let the block handle it entirely.
+        for it in self.items(event.scenePos()):
+            if isinstance(it, HarnessBoxItem):
+                super().contextMenuEvent(event)
+                return
+
         # Select the part under the cursor if it isn't already selected.
         for it in self.items(event.scenePos()):
             part_item = it if isinstance(it, PartItem) else (
@@ -666,6 +717,7 @@ class BoardView(QGraphicsView):
         for entry in getattr(self, "_clipboard_boxes", []):
             box = HarnessBoxItem()
             box.apply_dict(entry)
+            box.set_name(self.board_scene.next_harness_name())
             box.setPos(box.pos() + QPointF(24, 24))
             new_items.append(box)
         for entry in getattr(self, "_clipboard", []):
@@ -806,7 +858,7 @@ class BoardView(QGraphicsView):
             
             # Only create the box if it's large enough (prevents accidental clicks)
             if rect.width() > 50 and rect.height() > 50:
-                box = HarnessBoxItem("New Harness")
+                box = HarnessBoxItem(self.board_scene.next_harness_name())
                 box.setRect(0, 0, rect.width(), rect.height())
                 box.setPos(rect.topLeft())
                 self.board_scene.undo_stack.push(

@@ -10,14 +10,14 @@ from harnessboard.excel_export import export_bom
 from harnessboard.pdf_export import export_pdf
 
 
-def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
+def export_folder(out_dir, scene, harness, bom_parts, bom_cables, name_hint=None) -> dict:
     out_dir = Path(out_dir)
     steps_dir = out_dir / "steps"
     mcam_dir = out_dir / "mcam"
     out_dir.mkdir(parents=True, exist_ok=True)
     mcam_dir.mkdir(exist_ok=True)
     
-    # Clean old steps folder to prevent ghost files
+    # 1. Clean old steps folder to prevent ghost files
     if steps_dir.exists():
         shutil.rmtree(steps_dir)
     steps_dir.mkdir(exist_ok=True)
@@ -30,10 +30,11 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
             "number": harness.number,
             "type": harness.htype,
         }
-        # Sanitize the name just in case it has weird characters
         harness_name = "".join(c for c in harness.number if c not in '<>:"/\\|?*')
+    elif name_hint:
+        harness_name = "".join(c for c in name_hint if c not in '<>:"/\\|?*')
 
-    # 1. Map parts to their bounding boxes
+    # 2. Map parts to their bounding boxes
     boxes = scene.harness_boxes()
     part_to_box = {}
     for item in scene.part_items():
@@ -44,9 +45,28 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
                 break
         part_to_box[item] = assigned
 
-    # 2. Copy step files
+    # 3. Calculate Target Z for each Block
+    box_z = {}
+    for box in boxes:
+        z_vals = []
+        for item in scene.part_items():
+            if box.sceneBoundingRect().contains(item.pos()) and item.part.z_depth is not None:
+                z_vals.append(item.part.z_depth)
+                
+        block_target = max(z_vals) if z_vals else 0.0
+        
+        # Casing rule: it sets a minimum Z
+        if box.has_casing:
+            block_target = max(block_target, box.casing_z)
+            
+        box_name = box.name.replace("/", "-")
+        box_z[box_name] = block_target if block_target > 0 else None
+        print(f"DEBUG: Block '{box.name}' Target Z = {box_z[box_name]}")
+
+    # 4. Copy step files
     copied_steps = []
     missing = []
+    warnings = []
     seen = set()
     
     for item in scene.part_items():
@@ -54,6 +74,11 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
         orientation = item.orientation
         box_name = part_to_box[item]
         
+        # Find the target Z for this part (block Z if inside a block, else its own Z)
+        target_z = part.z_depth
+        if box_name in box_z and box_z[box_name] is not None:
+            target_z = box_z[box_name]
+
         box_steps_dir = steps_dir / box_name
         box_steps_dir.mkdir(parents=True, exist_ok=True)
         
@@ -62,9 +87,12 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
             continue
         seen.add(key)
         
-        z = part.z_depth
-        step_path = part.resolve_step(orientation, z)
+        step_path = part.resolve_step(orientation, target_z)
         
+        # Add a warning if the part's base Z is lower than the block's required Z
+        if part.z_depth is not None and target_z is not None and part.z_depth < target_z:
+            warnings.append(f"{part.name} max Z is {part.z_depth}, but block '{box_name}' requires {target_z}")
+            
         if step_path is None or not step_path.is_file():
             missing.append(f"{box_name}: {part.name} [{orientation}]")
             continue
@@ -74,17 +102,25 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
             shutil.copy2(step_path, dest)
             copied_steps.append(f"{box_name}/{dest.name}")
             
+        # Copy MCAM files
         for mcam in part.folder.glob("*.mcam"):
             dest_mcam = mcam_dir / mcam.name
             if not dest_mcam.exists():
                 shutil.copy2(mcam, dest_mcam)
 
-    # 3. Exports with clean naming
+    # 5. Exports with clean naming
+    print("DEBUG: About to call export_pdf...", flush=True)
     try:
         export_pdf(out_dir / f"{harness_name}.pdf", scene, info, bom_parts, bom_cables)
+        print("DEBUG: export_pdf finished successfully", flush=True)
+        
         export_bom(out_dir / f"BOM_{harness_name}.xlsx", bom_parts, bom_cables, info)
+        print("DEBUG: export_bom finished successfully", flush=True)
+        
         export_bom_csv(out_dir / f"BOM_{harness_name}.csv", bom_parts, bom_cables, info)
+        print("DEBUG: export_bom_csv finished successfully", flush=True)
     except Exception as exc:
+        print(f"DEBUG: Export exception caught: {exc}", flush=True)
         return {"error": str(exc)}
 
     return {
@@ -92,4 +128,5 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables) -> dict:
         "steps_copied": len(copied_steps),
         "mcam_copied": len(list(mcam_dir.glob("*.mcam"))),
         "missing": missing,
+        "warnings": warnings,
     }

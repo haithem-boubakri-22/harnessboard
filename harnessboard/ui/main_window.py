@@ -382,7 +382,25 @@ class MainWindow(QMainWindow):
         self.current_file = Path(path)
         return self._write_to(self.current_file)
 
+    def _validate_unique_harness_names(self) -> bool:
+        boxes = self.scene.harness_boxes()
+        seen = {}
+        for box in boxes:
+            key = box.name.lower()
+            if key in seen:
+                msg = ("Two harness blocks have the same name: '" + box.name + "'" +
+                       chr(10) + chr(10) +
+                       "Every harness block on the board must have a unique name before saving." +
+                       chr(10) + chr(10) +
+                       "Double-click a block to rename it.")
+                QMessageBox.warning(self, "Duplicate Harness Names", msg)
+                return False
+            seen[key] = True
+        return True
+
     def _write_to(self, path: Path) -> bool:
+        if not self._validate_unique_harness_names():
+            return False
         try:
             path.write_text(
                 json.dumps(self.scene.to_dict(), indent=2), encoding="utf-8"

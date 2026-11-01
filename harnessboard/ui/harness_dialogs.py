@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QDoubleSpinBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -122,3 +124,37 @@ class OpenHarnessDialog(QDialog):
             return
         self.harness = harness
         super().accept()
+
+
+class HarnessBlockPropertiesDialog(QDialog):
+    def __init__(self, name: str, has_casing: bool, casing_z: float, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Harness Block Properties")
+        self.setMinimumWidth(300)
+
+        layout = QFormLayout(self)
+
+        self.name_edit = QLineEdit(name)
+        layout.addRow("Harness Number/Name:", self.name_edit)
+
+        self.casing_check = QCheckBox("Has Protective Casing")
+        self.casing_check.setChecked(has_casing)
+        layout.addRow("", self.casing_check)
+
+        self.casing_spin = QDoubleSpinBox()
+        self.casing_spin.setRange(0.0, 1000.0)
+        self.casing_spin.setDecimals(1)
+        self.casing_spin.setSuffix(" mm")
+        self.casing_spin.setValue(casing_z)
+        self.casing_spin.setEnabled(has_casing)
+        layout.addRow("Casing Z (Minimum):", self.casing_spin)
+
+        self.casing_check.toggled.connect(self.casing_spin.setEnabled)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def get_values(self):
+        return self.name_edit.text().strip(), self.casing_check.isChecked(), self.casing_spin.value()
