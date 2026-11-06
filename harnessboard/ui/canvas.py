@@ -426,8 +426,10 @@ class BoardScene(QGraphicsScene):
 
     # --- context menu (NEW) -------------------------------------------
     def contextMenuEvent(self, event) -> None:
-        # If right-clicking a Harness Block, let the block handle it entirely.
+        # If right-clicking a Harness Block (and not a part on top of it), let the block handle it.
         for it in self.items(event.scenePos()):
+            if isinstance(it, (PartItem, CableItem)):
+                break  # Found a part/cable, let it handle the right-click normally
             if isinstance(it, HarnessBoxItem):
                 super().contextMenuEvent(event)
                 return
