@@ -198,22 +198,78 @@ class HarnessBoxItem(QGraphicsRectItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         
-        # Solid magenta line like the reference PDF
         self.setPen(QPen(QColor("#d81b60"), 1.5, Qt.PenStyle.SolidLine))
-        self.setBrush(QColor(216, 27, 96, 10))  # Very faint fill
-        self.setZValue(-10)
+        self.setBrush(QColor(216, 27, 96, 10)) 
+        self.setZValue(-10) 
+        
         self._block_moves = False
         self.has_casing = False
         self.casing_z = 30.0
         self._resizing = False
         self._resize_start_pos = None
         self._resize_start_rect = None
-        
-        self.label = QGraphicsSimpleTextItem(name, self)
-        self.label.setFont(QFont("", 10, QFont.Weight.Bold))
-        self.label.setBrush(QColor("#000000"))
-        self.label.setPos(rect.left() + 15, rect.top() + 15)
 
+    def update_label(self):
+        self.update()
+
+    def set_name(self, new_name: str):
+        self.name = new_name
+        self.update_label()
+
+    def boundingRect(self) -> QRectF:
+        # Inflate by a few pixels so Qt clears the pen outline and handle when moving
+        return self.rect().adjusted(-3, -3, 3, 3)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        rect = self.rect()
+        
+        # 1. Draw the base pink rectangle
+        painter.setPen(self.pen())
+        painter.setBrush(self.brush())
+        painter.drawRect(rect)
+        
+        # 2. Draw the title block (clamped to the box size so it doesn't spill)
+        block_w = min(rect.width(), max(150, len(self.name) * 12 + 40))
+        block_h = min(rect.height(), 40)
+        
+        if block_w > 0 and block_h > 0:
+            painter.setPen(QPen(QColor("#000000"), 1.0))
+            painter.setBrush(QBrush(QColor("#ffffff")))
+            table_rect = QRectF(rect.left(), rect.top(), block_w, block_h)
+            painter.drawRect(table_rect)
+            
+            # Vertical separator inside table
+            if block_w > 20:
+                painter.drawLine(
+                    QPointF(rect.left() + block_w * 0.7, rect.top()),
+                    QPointF(rect.left() + block_w * 0.7, rect.top() + block_h)
+                )
+            
+            # 3. Draw the text directly in the paint event
+            if block_h > 10:
+                painter.setPen(QColor("#000000"))
+                font = QFont("", 10, QFont.Weight.Bold)
+                painter.setFont(font)
+                text_rect = table_rect.adjusted(5, 0, -5, 0)
+                
+                text = self.name
+                if self.has_casing:
+                    text += f" (Casing Z{self.casing_z:g})"
+                    
+                painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+        
+        # 4. Draw the resize handle
+        if self.isSelected() or self._resizing:
+            painter.setPen(QPen(QColor("#d81b60"), 1.0))
+            painter.setBrush(QColor("#d81b60"))
+            handle_size = 10
+            hr = QRectF(
+                rect.right() - handle_size, 
+                rect.bottom() - handle_size, 
+                handle_size, 
+                handle_size
+            )
+            painter.drawRect(hr)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -230,8 +286,8 @@ class HarnessBoxItem(QGraphicsRectItem):
     def mouseMoveEvent(self, event):
         if self._resizing:
             delta = event.pos() - self._resize_start_pos
-            new_w = max(200, self._resize_start_rect.width() + delta.x())
-            new_h = max(150, self._resize_start_rect.height() + delta.y())
+            new_w = max(150, self._resize_start_rect.width() + delta.x())
+            new_h = max(80, self._resize_start_rect.height() + delta.y())
             self.setRect(0, 0, new_w, new_h)
             event.accept()
             return
@@ -245,72 +301,12 @@ class HarnessBoxItem(QGraphicsRectItem):
         super().mouseReleaseEvent(event)
 
     def hoverMoveEvent(self, event):
-        # Change cursor to diagonal resize when hovering over the handle
         if (event.pos().x() >= self.rect().width() - 15 and 
             event.pos().y() >= self.rect().height() - 15):
             self.setCursor(Qt.CursorShape.SizeFDiagCursor)
         else:
             self.setCursor(Qt.CursorShape.ArrowCursor)
         super().hoverMoveEvent(event)
-
-    def paint(self, painter: QPainter, option, widget=None):
-        # Draw the base rectangle
-        super().paint(painter, option, widget)
-        
-        # Draw a "Title Block" in the top left corner (like the reference PDF)
-        rect = self.rect()
-        block_w = max(250, len(self.name) * 12 + 40)
-        block_h = 40
-        
-        painter.setPen(QPen(QColor("#000000"), 1.0))
-        painter.setBrush(QBrush(QColor("#ffffff")))
-        
-        # Draw the white table box
-        table_rect = QRectF(rect.left(), rect.top(), block_w, block_h)
-        painter.drawRect(table_rect)
-        
-        # Draw vertical separator line inside the table
-        painter.drawLine(
-            QPointF(rect.left() + block_w * 0.7, rect.top()),
-            QPointF(rect.left() + block_w * 0.7, rect.top() + block_h)
-        )
-        
-        # Draw the resize handle in the bottom-right corner
-        if self.isSelected() or self._resizing:
-            painter.setPen(QPen(QColor("#d81b60"), 1.0))
-            painter.setBrush(QColor("#d81b60"))
-            handle_size = 10
-            hr = QRectF(
-                rect.right() - handle_size, 
-                rect.bottom() - handle_size, 
-                handle_size, 
-                handle_size
-            )
-            painter.drawRect(hr)
-
-    def update_label(self):
-        text = self.name
-        if self.has_casing:
-            text += f" (Casing Z{self.casing_z:g})"
-        self.label.setText(text)
-        self.update()
-
-    def set_name(self, new_name: str):
-        self.name = new_name
-        self.update_label() # Repaint the table to fit the new name
-
-    def itemChange(self, change, value):
-        # ItemPositionChange fires BEFORE the block moves, so value is the new pos, self.pos() is the old pos
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
-            if not getattr(self, "_block_moves", False) and self.scene():
-                self._block_moves = True
-                delta = value - self.pos()
-                for item in self.scene().part_items():
-                    # Check if part is currently inside the block's bounding box
-                    if self.rect().contains(self.mapFromScene(item.pos())):
-                        item.setPos(item.pos() + delta)
-                self._block_moves = False
-        return super().itemChange(change, value)
 
     def mouseDoubleClickEvent(self, event):
         self.open_properties()
@@ -327,7 +323,6 @@ class HarnessBoxItem(QGraphicsRectItem):
         if dlg.exec():
             new_name, new_casing, new_z = dlg.get_values()
             if new_name:
-                # Duplicate check
                 scene = self.scene()
                 if scene is not None:
                     for box in scene.harness_boxes():
@@ -340,6 +335,17 @@ class HarnessBoxItem(QGraphicsRectItem):
             self.has_casing = new_casing
             self.casing_z = new_z
             self.update_label()
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            if not getattr(self, "_block_moves", False) and self.scene():
+                self._block_moves = True
+                delta = value - self.pos()
+                for item in self.scene().part_items():
+                    if self.rect().contains(self.mapFromScene(item.pos())):
+                        item.setPos(item.pos() + delta)
+                self._block_moves = False
+        return super().itemChange(change, value)
 
     def to_dict(self) -> dict:
         r = self.rect()
@@ -360,8 +366,6 @@ class HarnessBoxItem(QGraphicsRectItem):
         self.has_casing = bool(data.get("has_casing", False))
         self.casing_z = float(data.get("casing_z", 30.0))
         self.update_label()
-        self.label.setPos(10, 10)
-
 
 class BoardScene(QGraphicsScene):
     def __init__(self, undo_stack, parent=None) -> None:
