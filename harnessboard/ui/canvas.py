@@ -196,6 +196,7 @@ class HarnessBoxItem(QGraphicsRectItem):
         self.name = name
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         
         # Solid magenta line like the reference PDF
         self.setPen(QPen(QColor("#d81b60"), 1.5, Qt.PenStyle.SolidLine))
@@ -299,13 +300,14 @@ class HarnessBoxItem(QGraphicsRectItem):
         self.update_label() # Repaint the table to fit the new name
 
     def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
-            if not self._block_moves and self.scene():
+        # ItemPositionChange fires BEFORE the block moves, so value is the new pos, self.pos() is the old pos
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            if not getattr(self, "_block_moves", False) and self.scene():
                 self._block_moves = True
                 delta = value - self.pos()
-                # Move all parts inside the box
                 for item in self.scene().part_items():
-                    if self.sceneBoundingRect().contains(item.pos()):
+                    # Check if part is currently inside the block's bounding box
+                    if self.rect().contains(self.mapFromScene(item.pos())):
                         item.setPos(item.pos() + delta)
                 self._block_moves = False
         return super().itemChange(change, value)
