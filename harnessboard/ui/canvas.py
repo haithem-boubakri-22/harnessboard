@@ -73,7 +73,6 @@ class PartItem(QGraphicsPixmapItem):
 
         self.label = QGraphicsSimpleTextItem(part.name, self)
         self.label.setFont(QFont("Segoe UI", 8))
-        self.label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
         rect = self.label.boundingRect()
         self.label.setPos(-rect.width() / 2, h / 2 + 4)
@@ -151,10 +150,28 @@ class PartItem(QGraphicsPixmapItem):
 
     # --- Qt hooks ---------------------------------------------------
     def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
-            scene = self.scene()
-            if isinstance(scene, BoardScene):
-                scene.part_moved(self)
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            if getattr(self, "_is_dragging", False) and self.scene():
+                delta = value - self.pos()
+                new_center = value + self.rect().center()
+                
+                for item in self.scene().part_items():
+                    # Check if the part is physically inside this block
+                    if self.rect().contains(self.mapFromScene(item.pos())):
+                        # Only move it if THIS block's center is the closest
+                        this_dist = (item.pos() - new_center).manhattanLength()
+                        is_closest = True
+                        
+                        for box in self.scene().harness_boxes():
+                            if box is not self:
+                                box_center = box.pos() + box.rect().center()
+                                other_dist = (item.pos() - box_center).manhattanLength()
+                                if other_dist < this_dist:
+                                    is_closest = False
+                                    break
+                        
+                        if is_closest:
+                            item.setPos(item.pos() + delta)
         return super().itemChange(change, value)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
@@ -175,15 +192,11 @@ class PartItem(QGraphicsPixmapItem):
             "rotation": self.rotation(),
             "orientation": self.orientation,
             "face_state": self.face_state,
-            "label_x": self.label.pos().x(),
-            "label_y": self.label.pos().y(),
         }
 
     def apply_dict(self, data: dict) -> None:
         self.setPos(float(data.get("x", 0)), float(data.get("y", 0)))
         self.setRotation(float(data.get("rotation", 0)))
-        if "label_x" in data:
-            self.label.setPos(float(data["label_x"]), float(data["label_y"]))
         self.set_orientation(str(data.get("orientation", "std")))
         self.set_face_state(str(data.get("face_state", "std")))
 
@@ -203,6 +216,7 @@ class HarnessBoxItem(QGraphicsRectItem):
         self.setZValue(-10) 
         
         self._block_moves = False
+        self._is_dragging = False
         self.has_casing = False
         self.casing_z = 30.0
         self._resizing = False
@@ -215,6 +229,15 @@ class HarnessBoxItem(QGraphicsRectItem):
     def set_name(self, new_name: str):
         self.name = new_name
         self.update_label()
+
+    def _overlaps_other_blocks(self, proposed_rect: QRectF) -> bool:
+        if not self.scene():
+            return False
+        for other in self.scene().harness_boxes():
+            if other is not self:
+                if proposed_rect.intersects(other.rect().translated(other.pos())):
+                    return True
+        return False
 
     def boundingRect(self) -> QRectF:
         # Inflate by a few pixels so Qt clears the pen outline and handle when moving
@@ -281,6 +304,7 @@ class HarnessBoxItem(QGraphicsRectItem):
                 self._resize_start_rect = self.rect()
                 event.accept()
                 return
+            self._is_dragging = True
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -288,7 +312,11 @@ class HarnessBoxItem(QGraphicsRectItem):
             delta = event.pos() - self._resize_start_pos
             new_w = max(150, self._resize_start_rect.width() + delta.x())
             new_h = max(80, self._resize_start_rect.height() + delta.y())
-            self.setRect(0, 0, new_w, new_h)
+            
+            proposed_rect = QRectF(self.pos(), QSizeF(new_w, new_h))
+            if not self._overlaps_other_blocks(proposed_rect):
+                self.setRect(0, 0, new_w, new_h)
+                
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -298,6 +326,7 @@ class HarnessBoxItem(QGraphicsRectItem):
             self._resizing = False
             event.accept()
             return
+        self._is_dragging = False
         super().mouseReleaseEvent(event)
 
     def hoverMoveEvent(self, event):
@@ -338,13 +367,37 @@ class HarnessBoxItem(QGraphicsRectItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
-            if not getattr(self, "_block_moves", False) and self.scene():
-                self._block_moves = True
-                delta = value - self.pos()
-                for item in self.scene().part_items():
-                    if self.rect().contains(self.mapFromScene(item.pos())):
-                        item.setPos(item.pos() + delta)
-                self._block_moves = False
+            if self.scene():
+                # 1. Overlap checks
+                current_rect = self.rect().translated(self.pos())
+                was_overlapping = self.scene().overlaps_any_box(current_rect, exclude=self)
+                proposed_rect = self.rect().translated(value)
+                will_overlap = self.scene().overlaps_any_box(proposed_rect, exclude=self)
+                
+                if will_overlap and not was_overlapping:
+                    return self.pos()
+
+                # 2. Move parts if we are selected (dragging) AND NOT during undo/redo
+                if not getattr(self, "_block_moves", False) and self.isSelected():
+                    delta = value - self.pos()
+                    new_center = value + self.rect().center()
+                    
+                    for item in self.scene().part_items():
+                        # Only move parts that are NOT selected (Qt moves selected parts automatically)
+                        if not item.isSelected() and self.rect().contains(self.mapFromScene(item.pos())):
+                            this_dist = (item.pos() - new_center).manhattanLength()
+                            is_closest = True
+                            
+                            for box in self.scene().harness_boxes():
+                                if box is not self:
+                                    box_center = box.pos() + box.rect().center()
+                                    other_dist = (item.pos() - box_center).manhattanLength()
+                                    if other_dist < this_dist:
+                                        is_closest = False
+                                        break
+                                        
+                            if is_closest:
+                                item.setPos(item.pos() + delta)
         return super().itemChange(change, value)
 
     def to_dict(self) -> dict:
@@ -366,6 +419,8 @@ class HarnessBoxItem(QGraphicsRectItem):
         self.has_casing = bool(data.get("has_casing", False))
         self.casing_z = float(data.get("casing_z", 30.0))
         self.update_label()
+        self._block_moves = False
+        self._is_dragging = False # Unfreeze
 
 class BoardScene(QGraphicsScene):
     def __init__(self, undo_stack, parent=None) -> None:
@@ -380,6 +435,13 @@ class BoardScene(QGraphicsScene):
 
     def harness_boxes(self) -> list[HarnessBoxItem]:
         return [i for i in self.items() if isinstance(i, HarnessBoxItem)]
+
+    def overlaps_any_box(self, proposed_rect: QRectF, exclude=None) -> bool:
+        for other in self.harness_boxes():
+            if other is not exclude:
+                if proposed_rect.intersects(other.rect().translated(other.pos())):
+                    return True
+        return False
 
     def next_harness_name(self) -> str:
         existing = {b.name.lower() for b in self.harness_boxes()}
@@ -776,21 +838,65 @@ class BoardView(QGraphicsView):
     def paste(self) -> None:
         if not getattr(self, "_clipboard", None) and not getattr(self, "_clipboard_boxes", None):
             return
+            
+        paste_delta = QPointF(50, 50)
+        
+        if getattr(self, "_clipboard_boxes", None):
+            test_box = HarnessBoxItem()
+            test_box.apply_dict(self._clipboard_boxes[0])
+            
+            boxes = self.board_scene.harness_boxes()
+            if boxes:
+                # Grid: 2 columns, matches the reference PDF layout
+                GAP = 150
+                COLUMNS = 2
+                
+                # Anchor = top-left of the block grid (uses pos() and rect() for precision)
+                anchor_x = min(b.pos().x() for b in boxes)
+                anchor_y = min(b.pos().y() for b in boxes)
+                
+                # Cell size = max of all blocks (past + new) so they never collide
+                all_w = [b.rect().width() for b in boxes] + [test_box.rect().width()]
+                all_h = [b.rect().height() for b in boxes] + [test_box.rect().height()]
+                cell_w = max(all_w) + GAP
+                cell_h = max(all_h) + GAP
+                
+                # Where does this new block belong in the grid?
+                idx = len(boxes)   # 0-indexed slot for the new block
+                col = idx % COLUMNS
+                row = idx // COLUMNS
+                
+                new_pos = QPointF(anchor_x + col * cell_w, anchor_y + row * cell_h)
+                
+                # Collision fallback (only if user manually scattered blocks in weird places)
+                for _ in range(50):
+                    test_rect = QRectF(new_pos.x(), new_pos.y(),
+                                       test_box.rect().width(), test_box.rect().height())
+                    if not self.board_scene.overlaps_any_box(test_rect):
+                        break
+                    row += 1
+                    new_pos = QPointF(anchor_x + col * cell_w, anchor_y + row * cell_h)
+                    
+                paste_delta = new_pos - test_box.pos()
+
         new_items = []
+        
         for entry in getattr(self, "_clipboard_boxes", []):
             box = HarnessBoxItem()
             box.apply_dict(entry)
             box.set_name(self.board_scene.next_harness_name())
-            box.setPos(box.pos() + QPointF(24, 24))
+            box.setPos(box.pos() + paste_delta)
             new_items.append(box)
+            
         for entry in getattr(self, "_clipboard", []):
             part = getattr(self, "_clipboard_parts", {}).get(entry["name"])
             if part is None:
                 continue
             item = PartItem(part, self.board_scene.labels_visible)
             item.apply_dict(entry)
-            item.setPos(item.pos() + QPointF(24, 24))
+            item.setPos(item.pos() + paste_delta)
             new_items.append(item)
+            
         if new_items:
             self.board_scene.undo_stack.push(
                 AddPartsCommand(self.board_scene, new_items, "Paste part(s)")
