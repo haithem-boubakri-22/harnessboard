@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal, QSizeF
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPen, QPixmap, QTransform, QBrush
 from PySide6.QtWidgets import (
     QMessageBox,
@@ -313,7 +313,7 @@ class HarnessBoxItem(QGraphicsRectItem):
             new_w = max(150, self._resize_start_rect.width() + delta.x())
             new_h = max(80, self._resize_start_rect.height() + delta.y())
             
-            proposed_rect = QRectF(self.pos(), QSizeF(new_w, new_h))
+            proposed_rect = QRectF(self.pos().x(), self.pos().y(), new_w, new_h)
             if not self._overlaps_other_blocks(proposed_rect):
                 self.setRect(0, 0, new_w, new_h)
                 
