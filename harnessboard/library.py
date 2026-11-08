@@ -1,12 +1,42 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 ICON_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".svg"}
 STEP_EXTENSIONS = {".step", ".stp"}
+
+_STEP_RE = re.compile(r"_(rot_mir|rot|mir|std)_Z([0-9]+(?:\.[0-9]+)?)\.(?:step|stp)$", re.IGNORECASE)
+
+
+def _scan_steps_from_folder(folder: Path) -> dict[str, dict[float, Path]]:
+    """Auto-discover step files in the part folder by filename pattern.
+    
+    Picks up files added AFTER the part was created. The folder is the
+    source of truth; part.json is kept in sync automatically.
+    """
+    steps: dict[str, dict[float, Path]] = {}
+    for f in folder.iterdir():
+        if not f.is_file() or f.suffix.lower() not in STEP_EXTENSIONS:
+            continue
+        m = _STEP_RE.search(f.name)
+        if m is None:
+            continue
+        orient = m.group(1).lower()
+        z = float(m.group(2))
+        steps.setdefault(orient, {})[z] = f
+    return steps
+
+
+def _steps_to_json(steps: dict[str, dict[float, Path]]) -> dict:
+    """Convert {orient: {z: Path}} to JSON-safe {orient: {z_str: filename}}."""
+    out = {}
+    for orient, bucket in steps.items():
+        out[orient] = {f"{z:g}": p.name for z, p in bucket.items()}
+    return out
 
 # The four orientation states. Order matters only for display.
 ORIENTATIONS = ("std", "mir", "rot", "rot_mir")
@@ -23,6 +53,7 @@ class Part:
     # Legacy single-file fields (kept for back-compat):
     step_path: Path | None = None
     z_depth: float | None = None
+    encombrement: float = 0.0
     # New schema:
     z_depths: list[float] = field(default_factory=list)
     # orientation -> {z_depth: absolute step file path}
@@ -166,6 +197,7 @@ def scan_library(root: str | Path) -> Library:
                 part.step_path = folder / f
 
         meta_file = folder / "part.json"
+        meta = None
         if meta_file.is_file():
             try:
                 meta = json.loads(meta_file.read_text(encoding="utf-8"))
@@ -173,6 +205,8 @@ def scan_library(root: str | Path) -> Library:
                     part.category = str(meta["category"])
                 if meta.get("z_depth") is not None:
                     part.z_depth = float(meta["z_depth"])
+                if meta.get("encombrement") is not None:
+                    part.encombrement = float(meta["encombrement"])
                 part.steps, zs_from_steps = _load_step_map(folder, meta, lib.errors)
                 declared = meta.get("z_depths")
                 if isinstance(declared, list):
@@ -181,6 +215,23 @@ def scan_library(root: str | Path) -> Library:
                     part.z_depths = zs_from_steps
             except (ValueError, TypeError) as exc:
                 lib.errors.append(f"{part.name}: bad part.json ({exc})")
+
+        # --- Folder scan: pick up step files added after part creation ---
+        folder_steps = _scan_steps_from_folder(folder)
+        if folder_steps:
+            part.steps = folder_steps
+            if meta is not None:
+                new_serialized = _steps_to_json(folder_steps)
+                if meta.get("steps") != new_serialized:
+                    meta["steps"] = new_serialized
+                    all_z = sorted({z for b in folder_steps.values() for z in b.keys()})
+                    if all_z:
+                        meta["z_depths"] = all_z
+                    try:
+                        meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                        print(f"📝 Updated part.json for {part.name} (steps resynced from folder)")
+                    except OSError as exc:
+                        lib.errors.append(f"{part.name}: could not update part.json ({exc})")
 
         if not part.category:
             part.category = "Uncategorized"

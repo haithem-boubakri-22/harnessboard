@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-    QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
+    QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QDoubleSpinBox, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -59,6 +59,18 @@ class AddPartDialog(QDialog):
 
         self.icon_down_edit, icon_down_row = self._path_row("Images (*.png *.jpg *.jpeg *.bmp *.svg)", preview=True)
         form.addRow("Face Down Icon (Optional):", icon_down_row)
+
+        self.z_spin = QDoubleSpinBox()
+        self.z_spin.setRange(0.0, 1000.0)
+        self.z_spin.setDecimals(1)
+        self.z_spin.setSuffix(" mm")
+        form.addRow("Base Z Depth:", self.z_spin)
+
+        self.encombrement_spin = QDoubleSpinBox()
+        self.encombrement_spin.setRange(0.0, 1000.0)
+        self.encombrement_spin.setDecimals(1)
+        self.encombrement_spin.setSuffix(" mm")
+        form.addRow("Encombrement (extra height):", self.encombrement_spin)
 
         outer.addLayout(form)
         outer.addWidget(QLabel("Step files (the app automatically selects the lowest Z):"))
@@ -251,7 +263,7 @@ class AddPartDialog(QDialog):
                 shutil.copy2(e["src"], folder / e["filename"])
                 steps_map[e["orient"]] = e["filename"]
 
-            meta = {"category": category, "z_depth": min_z}
+            meta = {"category": category, "z_depth": min_z, "encombrement": self.encombrement_spin.value()}
             if steps_map:
                 meta["steps"] = steps_map
 

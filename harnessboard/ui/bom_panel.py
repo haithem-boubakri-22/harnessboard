@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
 from harnessboard.bom import bom_cables, bom_parts
 from harnessboard.ui.canvas import BoardScene
 
-HEADERS = ["Item", "Category", "Qty", "Z depth", "Ø"]
+HEADERS = ["Item", "Category", "Qty", "Z depth", "Height", "Ø"]
 
 
 class BomPanel(QTableWidget):
@@ -19,10 +19,11 @@ class BomPanel(QTableWidget):
         self.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.verticalHeader().setVisible(False)
         self.horizontalHeader().setStretchLastSection(True)
-        self.setColumnWidth(0, 200)
-        self.setColumnWidth(1, 150)
+        self.setColumnWidth(0, 180)
+        self.setColumnWidth(1, 130)
         self.setColumnWidth(2, 50)
         self.setColumnWidth(3, 80)
+        self.setColumnWidth(4, 140)
 
     def refresh(self, scene: BoardScene) -> None:
         parts = bom_parts(scene)
@@ -41,21 +42,21 @@ class BomPanel(QTableWidget):
                     cell.setFont(font)
                 if tint is not None:
                     cell.setBackground(QColor(tint))
-                if col in (2, 3, 4):
+                if col in (2, 3, 4, 5):
                     cell.setTextAlignment(
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
                     )
                 self.setItem(row, col, cell)
 
         if parts:
-            add_row(["PARTS", "", "", "", ""], bold=True, tint="#e8eef7")
+            add_row(["PARTS", "", "", "", "", ""], bold=True, tint="#e8eef7")
             for r in parts:
                 z = f"{r.z_depth:g} mm" if r.z_depth is not None else "—"
-                add_row([r.name, r.category, r.quantity, z, ""])
+                add_row([r.name, r.category, r.quantity, z, r.height_display, ""])
         if cables:
-            add_row(["CABLES", "", "", "Z standard", ""], bold=True, tint="#e8f7ea")
+            add_row(["CABLES", "", "", "Z standard", "", "Ø"], bold=True, tint="#e8f7ea")
             for c in cables:
                 z = f"{c.z_standard:g} mm" if c.z_standard is not None else "—"
-                add_row([c.designation, "Cable", 1, z, f"{c.diameter:g} mm"])
+                add_row([c.designation, "Cable", 1, z, "", f"{c.diameter:g} mm"])
         if not parts and not cables:
-            add_row(["(board is empty)", "", "", "", ""])
+            add_row(["(board is empty)", "", "", "", "", ""])

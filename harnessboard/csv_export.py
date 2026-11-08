@@ -27,12 +27,9 @@ def export_bom_csv(
         w.writerow(["Date", date.today().isoformat()])
         w.writerow([])
         w.writerow(["PARTS"])
-        w.writerow(["Model name", "Category", "Quantity", "Z depth (mm)"])
+        w.writerow(["Model name", "Category", "Quantity", "Height (mm)"])
         for r in parts:
-            w.writerow(
-                [r.name, r.category, r.quantity,
-                 r.z_depth if r.z_depth is not None else ""]
-            )
+            w.writerow([r.name, r.category, r.quantity, r.height_display])
         w.writerow([])
         w.writerow(["CABLES"])
         w.writerow(["Designation", "Diameter (mm)", "Z standard (mm)"])

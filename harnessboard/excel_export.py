@@ -42,7 +42,7 @@ def export_bom(
 
     ws.cell(row, 1, "PARTS").font = _BOLD
     row += 1
-    for col, title in enumerate(["Model name", "Category", "Quantity", "Z depth (mm)"], 1):
+    for col, title in enumerate(["Model name", "Category", "Quantity", "Height (mm)"], 1):
         cell = ws.cell(row, col, title)
         cell.font = _BOLD
         cell.fill = _HEADER_FILL
@@ -51,7 +51,7 @@ def export_bom(
         ws.cell(row, 1, r.name)
         ws.cell(row, 2, r.category)
         ws.cell(row, 3, r.quantity)
-        ws.cell(row, 4, r.z_depth if r.z_depth is not None else "")
+        ws.cell(row, 4, r.height_display)
         row += 1
     row += 1
 

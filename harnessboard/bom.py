@@ -41,6 +41,22 @@ class BomRow:
     category: str
     z_depth: float | None
     quantity: int
+    encombrement: float = 0.0
+
+    @property
+    def total_height(self) -> float | None:
+        if self.z_depth is None:
+            return None
+        return self.z_depth + self.encombrement
+
+    @property
+    def height_display(self) -> str:
+        """Format: '30 = 25 + 5' or '25' if no encombrement."""
+        if self.z_depth is None:
+            return "—"
+        if self.encombrement == 0.0:
+            return f"{self.z_depth:g}"
+        return f"{self.total_height:g} = {self.z_depth:g} + {self.encombrement:g}"
 
 
 @dataclass
@@ -56,7 +72,10 @@ def bom_parts(scene: BoardScene) -> list[BomRow]:
         part = item.part
         row = counts.get(part.name)
         if row is None:
-            counts[part.name] = BomRow(part.name, part.category, part.z_depth, 1)
+            counts[part.name] = BomRow(
+                part.name, part.category, part.z_depth, 1,
+                encombrement=part.encombrement
+            )
         else:
             row.quantity += 1
     return sorted(counts.values(), key=lambda r: (r.category.lower(), r.name.lower()))

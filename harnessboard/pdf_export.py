@@ -170,11 +170,10 @@ def _draw_bom(painter, rect, bom_parts, bom_cables, px_per_mm) -> None:
         return True
 
     header_fill = QColor("#e8eef7")
-    row(["Model name", "Category", "Qty", "Z (mm)"], bold=True, fill=header_fill)
+    row(["Model name", "Category", "Qty", "Height (mm)"], bold=True, fill=header_fill)
     for r in bom_parts:
         if not row([
-            r.name, r.category, str(r.quantity),
-            f"{r.z_depth:g}" if r.z_depth is not None else "—",
+            r.name, r.category, str(r.quantity), r.height_display,
         ]):
             break
 

@@ -1,0 +1,24 @@
+{
+  "category": "Clips",
+  "z_depth": 25.0,
+  "encombrement": 5.0,
+  "steps": {
+    "mir": {
+      "25": "GR-40_mir_Z25.step"
+    },
+    "rot": {
+      "25": "GR-40_rot_Z25.step"
+    },
+    "std": {
+      "30": "GR-40_std_Z30.step",
+      "25": "GR-40_std_Z25.step"
+    },
+    "rot_mir": {
+      "25": "GR-40_rot_mir_Z25.step"
+    }
+  },
+  "z_depths": [
+    25.0,
+    30.0
+  ]
+}
