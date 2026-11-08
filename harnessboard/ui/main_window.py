@@ -4,7 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QUndoStack
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -48,6 +48,12 @@ class MainWindow(QMainWindow):
         self.undo_stack.indexChanged.connect(self._refresh_bom)
 
         self.scene = BoardScene(self.undo_stack, self)
+        # Debounced refresh — catches any geometry change that might affect Z
+        self._bom_timer = QTimer(self)
+        self._bom_timer.setSingleShot(True)
+        self._bom_timer.setInterval(150)
+        self._bom_timer.timeout.connect(self._refresh_bom)
+        self.scene.changed.connect(lambda *_: self._bom_timer.start())
         self.scene.open_block_standalone_requested.connect(self._open_block_standalone)
         self.view = BoardView(self.scene)
         self.view.partsDeleted.connect(self._on_parts_deleted)
@@ -63,6 +69,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
 
         self.part_details = PartDetails(self)
+        self.part_details.editRequested.connect(self._edit_part)
         details_dock = QDockWidget("Part details", self)
         details_dock.setWidget(self.part_details)
         details_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
@@ -355,6 +362,34 @@ class MainWindow(QMainWindow):
         import subprocess, sys
         subprocess.Popen([sys.executable, "-m", "harnessboard", "--block", str(block_file)])
 
+    def _edit_part(self, part) -> None:
+        from harnessboard.ui.edit_part_dialog import EditPartDialog
+        dlg = EditPartDialog(part, self.library.categories, self)
+        if not dlg.exec():
+            return
+
+        old_name = part.name
+        self.reload_library()
+
+        new_part = self.library.part_by_name(old_name)
+        if new_part is None:
+            QMessageBox.warning(
+                self, "Part missing",
+                f"Part '{old_name}' was not found after reload. Check the library folder."
+            )
+            return
+
+        # Update every PartItem that references this part
+        for item in self.scene.part_items():
+            if item.part.name == old_name:
+                item.part = new_part
+                item._apply_orientation_transform()
+                item.update()
+
+        self.part_details.show_part(new_part)
+        self._refresh_bom()
+        self.statusBar().showMessage(f"Updated part: {new_part.name}")
+
     def _on_parts_deleted(self, names: list[str]) -> None:
         # Files are cleaned up automatically on the next Save/Export.
         pass
@@ -515,6 +550,18 @@ class MainWindow(QMainWindow):
                 if blocks:
                     msg += f" | blocks: {', '.join(blocks)}"
                 self.statusBar().showMessage(msg)
+
+                warnings = summary.get("warnings", [])
+                if warnings:
+                    header = "Some parts did not have a step file matching the required Z:" + chr(10) + chr(10)
+                    body = chr(10).join(f"  - {w}" for w in warnings[:20])
+                    footer = ""
+                    if len(warnings) > 20:
+                        footer = chr(10) + f"  ... and {len(warnings) - 20} more"
+                    QMessageBox.warning(
+                        self, "Step file warnings",
+                        header + body + footer,
+                    )
             except Exception as exc:
                 import traceback
                 traceback.print_exc()

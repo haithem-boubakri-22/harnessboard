@@ -96,10 +96,19 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables, name_hint=None
         seen.add(key)
         
         step_path = part.resolve_step(orientation, target_z)
+        actual_z = part.resolve_effective_z(orientation, target_z)
         
-        # Add a warning if the part's base Z is lower than the block's required Z
-        if part.z_depth is not None and target_z is not None and part.z_depth < target_z:
-            warnings.append(f"{part.name} max Z is {part.z_depth}, but block '{box_name}' requires {target_z}")
+        if target_z is not None:
+            if actual_z is None:
+                warnings.append(
+                    f"{box_name} / {part.name} [{orientation}]: "
+                    f"no step file for this orientation"
+                )
+            elif actual_z != target_z:
+                warnings.append(
+                    f"{box_name} / {part.name} [{orientation}]: "
+                    f"required Z={target_z:g}, exported Z={actual_z:g} (no matching file)"
+                )
             
         if step_path is None or not step_path.is_file():
             missing.append(f"{box_name}: {part.name} [{orientation}]")

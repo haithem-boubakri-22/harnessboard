@@ -75,6 +75,25 @@ class Part:
                 return zs[0]
         return None
 
+    def resolve_effective_z(self, orientation: str, target_z: float | None) -> float | None:
+        """Return the Z value resolve_step would pick (exact, else highest <= target, else lowest)."""
+        if not self.steps:
+            return self.z_depth
+        bucket = self.steps.get(orientation)
+        if not bucket:
+            return self.z_depth
+        available = sorted(bucket.keys())
+        if not available:
+            return self.z_depth
+        if target_z is None:
+            return available[0]
+        if target_z in bucket:
+            return target_z
+        lower = [z for z in available if z < target_z]
+        if lower:
+            return max(lower)
+        return available[0]
+
     def resolve_step(self, orientation: str, z: float | None) -> Path | None:
         """Best step file for a given orientation + Z. Snaps to nearest Z."""
         # New schema preferred:

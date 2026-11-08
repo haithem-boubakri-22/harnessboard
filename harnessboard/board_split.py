@@ -135,4 +135,5 @@ def sync_board_and_blocks(harness, scene, library) -> dict:
         "global_steps": global_result.get("steps_copied", 0),
         "blocks_written": block_names_written,
         "missing": global_result.get("missing", []),
+        "warnings": sorted(set(global_result.get("warnings", []))),
     }

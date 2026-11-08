@@ -1,9 +1,8 @@
-"""BOM computation and per-cable Z-depth rule (SPEC.md §6, v1 rule).
+"""BOM computation and per-cable Z-depth rule (SPEC.md §6).
 
-Z per cable = the highest z_depth among every part attached to that cable:
-its two endpoint parts (if attached) plus every part sitting on the line
-(clips, terminals — anything whose center lies within snap distance of the
-cable path).
+Z per cable = the highest *effective* Z among every part attached to it.
+Effective Z = block target Z (max of base Zs, elevated by casing) for parts
+inside a block, else the part's own base Z.
 """
 from __future__ import annotations
 
@@ -11,6 +10,32 @@ from dataclasses import dataclass
 
 from harnessboard.ui.cable import SNAP_DISTANCE, CableItem
 from harnessboard.ui.canvas import BoardScene, PartItem
+
+
+def _block_target_z(scene: BoardScene) -> dict:
+    """Shared helper: {block: target_z or None}. Used by bom_parts and cable_z."""
+    block_z = {}
+    for box in scene.harness_boxes():
+        z_vals = [
+            item.part.z_depth
+            for item in scene.part_items()
+            if box.sceneBoundingRect().contains(item.pos()) and item.part.z_depth is not None
+        ]
+        target = max(z_vals) if z_vals else 0.0
+        if box.has_casing:
+            target = max(target, box.casing_z)
+        block_z[box] = target if target > 0 else None
+    return block_z
+
+
+def _part_display_z(item: PartItem, scene: BoardScene, block_z: dict) -> float | None:
+    """Effective Z for display = block target if inside a block, else base Z."""
+    for box in scene.harness_boxes():
+        if box.sceneBoundingRect().contains(item.pos()):
+            if block_z.get(box) is not None:
+                return block_z[box]
+            break
+    return item.part.z_depth
 
 
 def cable_attachments(scene: BoardScene, cable: CableItem) -> set[PartItem]:
@@ -27,11 +52,12 @@ def cable_attachments(scene: BoardScene, cable: CableItem) -> set[PartItem]:
 
 
 def cable_z(scene: BoardScene, cable: CableItem) -> float | None:
+    block_z = _block_target_z(scene)
     depths = [
-        p.part.z_depth
+        _part_display_z(p, scene, block_z)
         for p in cable_attachments(scene, cable)
-        if p.part.z_depth is not None
     ]
+    depths = [z for z in depths if z is not None]
     return max(depths) if depths else None
 
 
@@ -51,7 +77,6 @@ class BomRow:
 
     @property
     def height_display(self) -> str:
-        """Format: '30 = 25 + 5' or '25' if no encombrement."""
         if self.z_depth is None:
             return "—"
         if self.encombrement == 0.0:
@@ -67,18 +92,27 @@ class CableRow:
 
 
 def bom_parts(scene: BoardScene) -> list[BomRow]:
-    counts: dict[str, BomRow] = {}
+    block_z = _block_target_z(scene)
+    counts: dict[tuple, BomRow] = {}
+
     for item in scene.part_items():
         part = item.part
-        row = counts.get(part.name)
+        display_z = _part_display_z(item, scene, block_z)
+
+        key = (part.name, display_z)
+        row = counts.get(key)
         if row is None:
-            counts[part.name] = BomRow(
-                part.name, part.category, part.z_depth, 1,
-                encombrement=part.encombrement
+            counts[key] = BomRow(
+                part.name, part.category, display_z, 1,
+                encombrement=part.encombrement,
             )
         else:
             row.quantity += 1
-    return sorted(counts.values(), key=lambda r: (r.category.lower(), r.name.lower()))
+
+    return sorted(
+        counts.values(),
+        key=lambda r: (r.category.lower(), r.name.lower(), r.z_depth or 0),
+    )
 
 
 def bom_cables(scene: BoardScene) -> list[CableRow]:

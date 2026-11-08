@@ -356,21 +356,31 @@ class HarnessBoxItem(QGraphicsRectItem):
 
     def open_properties(self):
         dlg = HarnessBlockPropertiesDialog(self.name, self.has_casing, self.casing_z)
-        if dlg.exec():
-            new_name, new_casing, new_z = dlg.get_values()
-            if new_name:
-                scene = self.scene()
-                if scene is not None:
-                    for box in scene.harness_boxes():
-                        if box is not self and box.name.lower() == new_name.lower():
-                            msg = "A harness block named '" + new_name + "' already exists." + chr(10) + "Names must be unique."
-                            QMessageBox.warning(None, "Duplicate Name", msg)
-                            return
-                self.name = new_name
-            
+        if not dlg.exec():
+            return
+        new_name, new_casing, new_z = dlg.get_values()
+        if not new_name:
+            new_name = self.name
+        if new_name != self.name:
+            scene = self.scene()
+            if scene is not None:
+                for box in scene.harness_boxes():
+                    if box is not self and box.name.lower() == new_name.lower():
+                        msg = "A harness block named '" + new_name + "' already exists." + chr(10) + "Names must be unique."
+                        QMessageBox.warning(None, "Duplicate Name", msg)
+                        return
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "undo_stack"):
+            from harnessboard.ui.commands import SetBlockPropertiesCommand
+            scene.undo_stack.push(
+                SetBlockPropertiesCommand(self, new_name, new_casing, new_z)
+            )
+        else:
+            self.name = new_name
             self.has_casing = new_casing
             self.casing_z = new_z
             self.update_label()
+            self.update()
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:

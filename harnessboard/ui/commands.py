@@ -105,3 +105,27 @@ class SetFaceStateCommand(QUndoCommand):
     def undo(self) -> None:
         for item, old in self._changes:
             item.set_face_state(old)
+
+
+class SetBlockPropertiesCommand(QUndoCommand):
+    """Change a harness block's name, casing flag, or casing Z value."""
+
+    def __init__(self, block, new_name: str, new_has_casing: bool, new_casing_z: float) -> None:
+        super().__init__("Change block properties")
+        self._block = block
+        self._old = (block.name, block.has_casing, block.casing_z)
+        self._new = (new_name, new_has_casing, new_casing_z)
+
+    def _apply(self, state) -> None:
+        name, has_casing, casing_z = state
+        self._block.name = name
+        self._block.has_casing = has_casing
+        self._block.casing_z = casing_z
+        self._block.update_label()
+        self._block.update()
+
+    def redo(self) -> None:
+        self._apply(self._new)
+
+    def undo(self) -> None:
+        self._apply(self._old)

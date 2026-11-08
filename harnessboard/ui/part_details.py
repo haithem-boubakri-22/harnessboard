@@ -1,16 +1,19 @@
 """Details pane for the selected part (Phase 1 stand-in for canvas placement)."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QFormLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFormLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from harnessboard.library import Part
 
 
 class PartDetails(QWidget):
+    editRequested = Signal(object)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._current_part = None
         layout = QVBoxLayout(self)
 
         self.icon_label = QLabel()
@@ -29,9 +32,24 @@ class PartDetails(QWidget):
         form.addRow("Z depth:", self.z_label)
         form.addRow("3D model:", self.step_label)
         layout.addLayout(form)
+
+        edit_row = QHBoxLayout()
+        self.edit_button = QPushButton("Edit Part…")
+        self.edit_button.setEnabled(False)
+        self.edit_button.clicked.connect(self._on_edit_clicked)
+        edit_row.addWidget(self.edit_button)
+        edit_row.addStretch(1)
+        layout.addLayout(edit_row)
+
         layout.addStretch(1)
 
+    def _on_edit_clicked(self) -> None:
+        if self._current_part is not None:
+            self.editRequested.emit(self._current_part)
+
     def show_part(self, part: Part) -> None:
+        self._current_part = part
+        self.edit_button.setEnabled(True)
         if part.icon_path:
             pixmap = QPixmap(str(part.icon_path)).scaled(
                 128, 128,
