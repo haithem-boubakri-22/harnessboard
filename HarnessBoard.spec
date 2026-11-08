@@ -4,7 +4,7 @@ a = Analysis(
     ['launcher.py'],
     pathex=[],
     binaries=[],
-    datas=[('sample_library', 'sample_library')],
+    datas=[('sample_library', 'sample_library'), ('harnessboard/resources', 'harnessboard/resources')],
     hiddenimports=['openpyxl', 'openpyxl.cell._writer'],
     hookspath=[],
     hooksconfig={},

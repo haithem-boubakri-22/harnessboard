@@ -22,6 +22,26 @@ def _app_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _load_stylesheet(app) -> None:
+    """Load QSS from resources, working in both source and frozen mode."""
+    base = None
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            base = Path(meipass) / "harnessboard" / "resources"
+    if base is None:
+        base = Path(__file__).resolve().parent / "resources"
+
+    qss_path = base / "style.qss"
+    if qss_path.is_file():
+        try:
+            app.setStyleSheet(qss_path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            print(f"Could not load stylesheet: {exc}")
+    else:
+        print(f"Stylesheet not found at {qss_path}")
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     app.setOrganizationName("HarnessBoard")

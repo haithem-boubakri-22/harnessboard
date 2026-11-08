@@ -613,6 +613,7 @@ class BoardScene(QGraphicsScene):
     def to_dict(self) -> dict:
         parts = sorted(self.part_items(), key=lambda i: (i.pos().y(), i.pos().x()))
         part_index = {item: i for i, item in enumerate(parts)}
+        print(f'💾 SAVE: serializing {len(parts)} parts, {len(self.harness_boxes())} boxes', flush=True)
         return {
             "app": "HarnessBoard",
             "version": 2,
@@ -623,6 +624,7 @@ class BoardScene(QGraphicsScene):
         }
 
     def load_dict(self, data: dict, library: Library) -> list[str]:
+        print(f'🔍 LOAD START: JSON has {len(data.get("parts", []))} parts, {len(data.get("boxes", []))} boxes', flush=True)
         warnings: list[str] = []
         self.clear()
         self.undo_stack.clear()
@@ -638,6 +640,7 @@ class BoardScene(QGraphicsScene):
             part = library.part_by_name(name)
             if part is None:
                 warnings.append(f"Part not in library, skipped: {name}")
+                print(f'🔍 LOAD: part "{name}" NOT IN LIBRARY', flush=True)
                 loaded_parts.append(None)
                 continue
             item = PartItem(part, self.labels_visible)
@@ -647,6 +650,10 @@ class BoardScene(QGraphicsScene):
         for entry in data.get("cables", []):
             cable = CableItem.from_dict(entry, loaded_parts, self.labels_visible)
             self.addItem(cable)
+        print(f'🔍 LOAD DONE: scene has {len(self.part_items())} parts, {len(self.harness_boxes())} boxes', flush=True)
+        for item in self.part_items():
+            pm = item.pixmap()
+            print(f'  🔍 VERIFY: {item.part.name:25s} pos=({item.pos().x():7.1f}, {item.pos().y():7.1f}) visible={item.isVisible()} pixmap={pm.width()}x{pm.height()} null={pm.isNull()}', flush=True)
         return warnings
 
 

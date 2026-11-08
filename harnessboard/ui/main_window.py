@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QUndoStack
 from PySide6.QtWidgets import (
+    QToolBar,
     QDockWidget,
     QFileDialog,
     QMainWindow,
@@ -63,25 +64,35 @@ class MainWindow(QMainWindow):
         self.library_panel = LibraryPanel(self)
         self.library_panel.partActivated.connect(self._on_part_activated)
         self.library_panel.cableActivated.connect(self.view.draw_cable)
-        dock = QDockWidget("Part library", self)
-        dock.setWidget(self.library_panel)
-        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
+        self.library_dock = QDockWidget("Part library", self)
+        self.library_dock.setWidget(self.library_panel)
+        self.library_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.library_dock)
 
         self.part_details = PartDetails(self)
         self.part_details.editRequested.connect(self._edit_part)
-        details_dock = QDockWidget("Part details", self)
-        details_dock.setWidget(self.part_details)
-        details_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, details_dock)
+        self.details_dock = QDockWidget("Part details", self)
+        self.details_dock.setWidget(self.part_details)
+        self.details_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.details_dock)
 
         self.bom_panel = BomPanel(self)
-        bom_dock = QDockWidget("BOM — Bill of Materials", self)
-        bom_dock.setWidget(self.bom_panel)
-        bom_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, bom_dock)
+        self.bom_dock = QDockWidget("BOM — Bill of Materials", self)
+        self.bom_dock.setWidget(self.bom_panel)
+        self.bom_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.bom_dock)
 
         self._build_menu()
+        self._build_toolbar()
         self.statusBar().showMessage(
             "Ready — create or open a harness (File menu), pick parts in the library, "
             "click on the board to place them"
@@ -131,6 +142,22 @@ class MainWindow(QMainWindow):
 
 
         view_menu = self.menuBar().addMenu("&View")
+
+        # Panel visibility toggles (with shortcuts)
+        for text, shortcut, dock_attr in [
+            ("Part &Library", "Ctrl+L", "library_dock"),
+            ("Part &Details", "Ctrl+P", "details_dock"),
+            ("&BOM", "Ctrl+B", "bom_dock"),
+        ]:
+            dock = getattr(self, dock_attr, None)
+            if dock is None:
+                continue
+            action = dock.toggleViewAction()
+            action.setText(text)
+            action.setShortcut(QKeySequence(shortcut))
+            view_menu.addAction(action)
+
+        view_menu.addSeparator()
         self.labels_action = QAction("Show &labels", self, checkable=True, checked=True)
         self.labels_action.toggled.connect(self.scene.set_labels_visible)
         view_menu.addAction(self.labels_action)
@@ -141,6 +168,35 @@ class MainWindow(QMainWindow):
 
         help_menu = self.menuBar().addMenu("&Help")
         self._add_action(help_menu, "&About", None, self._about)
+
+    def _build_toolbar(self) -> None:
+        """Top toolbar with toggle buttons for every dockable panel."""
+        from PySide6.QtGui import QIcon
+
+        toolbar = QToolBar("Panels", self)
+        toolbar.setMovable(False)
+        toolbar.setObjectName("PanelToolbar")
+        self.addToolBar(toolbar)
+
+        for dock, label, shortcut in [
+            (getattr(self, "library_dock", None), "Library", "Ctrl+L"),
+            (getattr(self, "details_dock", None), "Details", "Ctrl+P"),
+            (getattr(self, "bom_dock", None), "BOM", "Ctrl+B"),
+        ]:
+            if dock is None:
+                continue
+            action = dock.toggleViewAction()
+            action.setText(label)
+            action.setToolTip(f"Show / hide {label} panel ({shortcut})")
+            toolbar.addAction(action)
+
+        toolbar.addSeparator()
+
+        # Zoom fit as a convenience shortcut
+        zoom_fit = QAction("Zoom Fit", self)
+        zoom_fit.setShortcut(QKeySequence("Ctrl+0"))
+        zoom_fit.triggered.connect(self.view.zoom_fit)
+        toolbar.addAction(zoom_fit)
 
     def _add_action(self, menu, text, shortcut, slot) -> QAction:
         action = QAction(text, self)
@@ -244,6 +300,7 @@ class MainWindow(QMainWindow):
 
 
     def _refresh_bom(self) -> None:
+        print(f'💾 BOM REFRESH: {len(self.scene.part_items())} parts, {len(self.scene.harness_boxes())} boxes', flush=True)
         for cable in self.scene.cable_items():
             cable.set_z_standard(cable_z(self.scene, cable))
         self.bom_panel.refresh(self.scene)
@@ -532,6 +589,7 @@ class MainWindow(QMainWindow):
             return True
 
         # --- Global board mode ---
+        print(f'💾 _write_to: path={path}, is_block_mode={getattr(self, "is_block_mode", False)}, harness={self.harness.number if self.harness else None}', flush=True)
         try:
             path.write_text(json.dumps(self.scene.to_dict(), indent=2), encoding="utf-8")
         except OSError as exc:
@@ -568,6 +626,21 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Sync Warning", f"Layout saved, but block sync failed:\n{exc}")
         else:
             self.statusBar().showMessage(f"Saved {path}")
+
+        # === DEBUG: dump scene + view state after save ===
+        try:
+            parts = self.scene.part_items()
+            boxes = self.scene.harness_boxes()
+            print(f'💾 AFTER SAVE: {len(parts)} parts, {len(boxes)} boxes', flush=True)
+            vr = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
+            print(f'💾 VIEW: {vr.width():.0f}x{vr.height():.0f} at ({vr.x():.0f},{vr.y():.0f}) zoom={self.view.transform().m11():.2f}', flush=True)
+            for item in parts:
+                br = item.sceneBoundingRect()
+                in_view = vr.intersects(br)
+                pm = item.pixmap()
+                print(f'  💾 {item.part.name[:22]:22s} pos=({item.pos().x():.0f},{item.pos().y():.0f}) in_view={in_view} visible={item.isVisible()} pm={pm.width()}x{pm.height()} null={pm.isNull()}', flush=True)
+        except Exception as exc:
+            print(f'💾 DEBUG DUMP ERROR: {exc}', flush=True)
 
         return True
 
