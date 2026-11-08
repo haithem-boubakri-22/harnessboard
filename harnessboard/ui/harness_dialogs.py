@@ -29,7 +29,7 @@ from harnessboard.project import (
 class NewHarnessDialog(QDialog):
     def __init__(self, projects_root: str, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("New harness")
+        self.setWindowTitle("New board")
         self.setMinimumWidth(420)
         self._root = projects_root
         self.harness: Harness | None = None
@@ -39,15 +39,15 @@ class NewHarnessDialog(QDialog):
         self.customer_combo.setEditable(True)
         self.customer_combo.addItems(list_customers(projects_root))
         self.customer_combo.setCurrentText("")
-        layout.addRow("Customer / project:", self.customer_combo)
+        layout.addRow("Customer:", self.customer_combo)
 
         self.number_edit = QLineEdit()
-        self.number_edit.setPlaceholderText("e.g. 9Y4 971 279 AD")
-        layout.addRow("Harness number:", self.number_edit)
+        self.number_edit.setPlaceholderText("e.g. MoldingLambo")
+        layout.addRow("Board name:", self.number_edit)
 
         self.type_combo = QComboBox()
         self.type_combo.addItems(HARNESS_TYPES)
-        layout.addRow("Harness type:", self.type_combo)
+        layout.addRow("Board type:", self.type_combo)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -63,7 +63,7 @@ class NewHarnessDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Invalid name",
-                'Customer and harness number must not be empty or contain <>:"/\\|?*',
+                'Customer and board name must not be empty or contain <>:"/\\|?*',
             )
             return
         folder = None
@@ -73,7 +73,7 @@ class NewHarnessDialog(QDialog):
                 break
         if folder is not None:
             QMessageBox.warning(
-                self, "Already exists", f"This harness already exists:\n{folder}"
+                self, "Already exists", f"This board already exists:\n{folder}"
             )
             return
         self.harness = create_harness(
@@ -85,13 +85,13 @@ class NewHarnessDialog(QDialog):
 class OpenHarnessDialog(QDialog):
     def __init__(self, projects_root: str, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Open harness")
+        self.setWindowTitle("Open board")
         self.resize(460, 420)
         self.harness: Harness | None = None
 
         layout = QVBoxLayout(self)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Customer / harness", "Type"])
+        self.tree.setHeaderLabels(["Customer / board", "Type"])
         self.tree.setColumnWidth(0, 280)
         layout.addWidget(self.tree)
 
@@ -120,7 +120,7 @@ class OpenHarnessDialog(QDialog):
         item = self.tree.currentItem()
         harness = item.data(0, Qt.ItemDataRole.UserRole) if item else None
         if harness is None:
-            QMessageBox.information(self, "Pick a harness", "Select a harness to open.")
+            QMessageBox.information(self, "Pick a board", "Select a board to open.")
             return
         self.harness = harness
         super().accept()

@@ -345,6 +345,13 @@ class HarnessBoxItem(QGraphicsRectItem):
         menu = QMenu()
         action = menu.addAction("Properties...")
         action.triggered.connect(self.open_properties)
+        
+        # Signal up to MainWindow to open this block standalone
+        scene = self.scene()
+        if scene is not None:
+            standalone_action = menu.addAction("Open this block standalone...")
+            standalone_action.triggered.connect(lambda: scene.open_block_standalone_requested.emit(self))
+        
         menu.exec(event.screenPos())
 
     def open_properties(self):
@@ -422,7 +429,12 @@ class HarnessBoxItem(QGraphicsRectItem):
         self._block_moves = False
         self._is_dragging = False # Unfreeze
 
+from PySide6.QtCore import Signal as _Signal
+
+
 class BoardScene(QGraphicsScene):
+    open_block_standalone_requested = _Signal(object)
+
     def __init__(self, undo_stack, parent=None) -> None:
         super().__init__(SCENE_RECT, parent)
         self.undo_stack = undo_stack

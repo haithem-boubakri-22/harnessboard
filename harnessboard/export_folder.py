@@ -10,7 +10,7 @@ from harnessboard.excel_export import export_bom
 from harnessboard.pdf_export import export_pdf
 
 
-def export_folder(out_dir, scene, harness, bom_parts, bom_cables, name_hint=None) -> dict:
+def export_folder(out_dir, scene, harness, bom_parts, bom_cables, name_hint=None, flat_steps=False, info_override=None) -> dict:
     out_dir = Path(out_dir)
     steps_dir = out_dir / "steps"
     mcam_dir = out_dir / "mcam"
@@ -23,8 +23,16 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables, name_hint=None
     steps_dir.mkdir(exist_ok=True)
 
     info: dict = {}
+    if info_override:
+        info = dict(info_override)
     harness_name = "layout"
-    if harness is not None:
+    if info_override:
+        harness_name = "".join(
+            c for c in info_override.get("number", "layout") if c not in '<>:"/\\|?*'
+        ).split("/")[-1].strip()
+        if not harness_name:
+            harness_name = "layout"
+    elif harness is not None:
         info = {
             "customer": harness.customer,
             "number": harness.number,
@@ -79,7 +87,7 @@ def export_folder(out_dir, scene, harness, bom_parts, bom_cables, name_hint=None
         if box_name in box_z and box_z[box_name] is not None:
             target_z = box_z[box_name]
 
-        box_steps_dir = steps_dir / box_name
+        box_steps_dir = steps_dir if flat_steps else (steps_dir / box_name)
         box_steps_dir.mkdir(parents=True, exist_ok=True)
         
         key = (box_name, part.name, orientation)

@@ -89,8 +89,14 @@ def list_harnesses(root: str | Path, customer: str) -> list[Harness]:
 def create_harness(
     root: str | Path, customer: str, number: str, htype: str
 ) -> Harness:
-    folder = Path(root) / customer.strip() / number.strip()
+    """Create a board folder: Projects/<Customer>/<BoardName>_<Type>/"""
+    c = customer.strip()
+    n = number.strip()
+    t = htype.strip()
+    safe_name = "".join(ch for ch in n if ch not in '<>:"/\\|?*').strip() or "Board"
+    safe_type = "".join(ch for ch in t if ch not in '<>:"/\\|?*').strip() or "Assembly"
+    folder = Path(root) / c / f"{safe_name}_{safe_type}"
     folder.mkdir(parents=True, exist_ok=True)
-    harness = Harness(customer.strip(), number.strip(), htype, folder)
+    harness = Harness(c, n, t, folder)
     harness.save_meta()
     return harness

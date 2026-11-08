@@ -27,6 +27,12 @@ def main() -> int:
     app.setOrganizationName("HarnessBoard")
     app.setApplicationName("HarnessBoard")
 
+    block_path = None
+    if "--block" in sys.argv:
+        idx = sys.argv.index("--block")
+        if idx + 1 < len(sys.argv):
+            block_path = Path(sys.argv[idx + 1])
+
     settings = AppSettings()
     if not settings.is_configured():
         project_root = _app_root()
@@ -41,6 +47,8 @@ def main() -> int:
 
     window = MainWindow(settings)
     window.show()
+    if block_path is not None and block_path.is_file():
+        window.open_block_file(block_path)
     return app.exec()
 
 

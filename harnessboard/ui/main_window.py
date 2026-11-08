@@ -37,6 +37,9 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.library = Library()
         self.harness: Harness | None = None
+        self.is_block_mode: bool = False
+        self._block_parent_customer: str = ""
+        self._block_parent_type: str = ""
         self.current_file: Path | None = None
         self.resize(1280, 800)
 
@@ -45,6 +48,7 @@ class MainWindow(QMainWindow):
         self.undo_stack.indexChanged.connect(self._refresh_bom)
 
         self.scene = BoardScene(self.undo_stack, self)
+        self.scene.open_block_standalone_requested.connect(self._open_block_standalone)
         self.view = BoardView(self.scene)
         self.view.partsDeleted.connect(self._on_parts_deleted)
         self.view.statusMessage.connect(self.statusBar().showMessage)
@@ -303,6 +307,54 @@ class MainWindow(QMainWindow):
 
 
 
+    def open_block_file(self, block_path: Path) -> None:
+        """Open a block .harn standalone (block-mode)."""
+        try:
+            data = json.loads(block_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Open failed", f"Could not read block file:\n{exc}")
+            return
+        if data.get("kind") != "block":
+            QMessageBox.warning(self, "Not a block file", "This file is not a harness block.")
+            return
+        self.scene.load_dict(data, self.library)
+        self.is_block_mode = True
+        self.harness = None
+        self.current_file = block_path
+        # Try to inherit parent metadata
+        self._block_parent_customer = ""
+        self._block_parent_type = ""
+        parent = block_path.parent.parent / "harness.json"
+        if parent.is_file():
+            try:
+                meta = json.loads(parent.read_text(encoding="utf-8"))
+                self._block_parent_customer = meta.get("customer", "")
+                self._block_parent_type = meta.get("type", "")
+            except Exception:
+                pass
+        self.undo_stack.setClean()
+        self._update_title()
+        self.view.zoom_fit()
+        self.statusBar().showMessage(f"Editing block: {block_path.parent.name}")
+
+    def _open_block_standalone(self, block) -> None:
+        """Open the block's layout.harn in isolation (new window)."""
+        if self.harness is None:
+            QMessageBox.warning(self, "No board", "Save the board first so the block folder exists.")
+            return
+        from harnessboard.board_split import _safe_name
+        block_folder = self.harness.folder / _safe_name(block.name)
+        block_file = block_folder / "layout.harn"
+        if not block_file.is_file():
+            QMessageBox.information(
+                self, "Save board first",
+                f"The block folder does not exist yet.\nSave the board (Ctrl+S) first to generate it.",
+            )
+            return
+        # Relaunch in block mode
+        import subprocess, sys
+        subprocess.Popen([sys.executable, "-m", "harnessboard", "--block", str(block_file)])
+
     def _on_parts_deleted(self, names: list[str]) -> None:
         # Files are cleaned up automatically on the next Save/Export.
         pass
@@ -399,12 +451,54 @@ class MainWindow(QMainWindow):
         return True
 
     def _write_to(self, path: Path) -> bool:
-        if not self._validate_unique_harness_names():
-            return False
         try:
-            path.write_text(
-                json.dumps(self.scene.to_dict(), indent=2), encoding="utf-8"
-            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save failed", f"Could not create folder:\n{exc}")
+            return False
+
+        # --- Block-standalone mode: save just this block's folder ---
+        if getattr(self, "is_block_mode", False):
+            try:
+                from harnessboard.board_split import serialize_current_block
+                from harnessboard.export_folder import export_folder
+                block_dict = serialize_current_block(self.scene)
+                path.write_text(json.dumps(block_dict, indent=2), encoding="utf-8")
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                QMessageBox.critical(self, "Save failed", f"Could not serialize block:\n{exc}")
+                return False
+
+            # Regenerate block PDF/BOM/steps
+            try:
+                from harnessboard.bom import bom_parts, bom_cables
+                from harnessboard.export_folder import export_folder
+                block_name = block_dict["block_name"]
+                parts = bom_parts(self.scene)
+                cables = bom_cables(self.scene)
+                info = {
+                    "customer": getattr(self, "_block_parent_customer", "") or "",
+                    "number": block_name,
+                    "type": getattr(self, "_block_parent_type", "") or "",
+                }
+                export_folder(
+                    path.parent, self.scene, None, parts, cables,
+                    name_hint=block_name, flat_steps=True, info_override=info,
+                )
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                QMessageBox.warning(self, "Export Warning", f"Block saved, but PDF/BOM failed:\n{exc}")
+
+            self.undo_stack.setClean()
+            self._update_title()
+            self.statusBar().showMessage(f"Saved block: {path}")
+            return True
+
+        # --- Global board mode ---
+        try:
+            path.write_text(json.dumps(self.scene.to_dict(), indent=2), encoding="utf-8")
         except OSError as exc:
             QMessageBox.critical(self, "Save failed", f"Could not write the file:\n{exc}")
             return False
@@ -412,23 +506,24 @@ class MainWindow(QMainWindow):
         self.undo_stack.setClean()
         self._update_title()
 
-        # Trigger export if we are saving a valid harness layout
-        print(f"DEBUG: _write_to reached. Harness is None? {self.harness is None}")
         if self.harness is not None:
             try:
-                success = self.export_full_folder(silent=True)
-                if not success:
-                    QMessageBox.warning(self, "Export Warning", "Layout saved, but PDF/BOM/STEP generation failed. Check the console for details.")
-                else:
-                    self.statusBar().showMessage(f"Saved and synced files to {self.harness.folder}")
-            except Exception as e:
+                from harnessboard.board_split import sync_board_and_blocks
+                summary = sync_board_and_blocks(self.harness, self.scene, self.library)
+                blocks = summary.get("blocks_written", [])
+                msg = f"Saved. Global steps: {summary['global_steps']}"
+                if blocks:
+                    msg += f" | blocks: {', '.join(blocks)}"
+                self.statusBar().showMessage(msg)
+            except Exception as exc:
                 import traceback
                 traceback.print_exc()
-                QMessageBox.warning(self, "Export Error", f"Layout saved, but an error occurred during export:\n{e}")
+                QMessageBox.warning(self, "Sync Warning", f"Layout saved, but block sync failed:\n{exc}")
         else:
             self.statusBar().showMessage(f"Saved {path}")
 
         return True
+
 
 
 
@@ -440,7 +535,9 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ misc
     def _update_title(self) -> None:
-        if self.harness is not None:
+        if getattr(self, "is_block_mode", False) and self.current_file is not None:
+            name = f"[Block] {self.current_file.parent.name}"
+        elif self.harness is not None:
             name = f"{self.harness.customer} / {self.harness.number} [{self.harness.htype}]"
         elif self.current_file is not None:
             name = self.current_file.name
